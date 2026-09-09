@@ -121,3 +121,12 @@ autorización de Finanzas o del dueño.
 - Validación: pruebas de cartera 4/4 correctas, compilación completa y demo
   local revisado. Se comprobó que los formularios de registro y edición abren
   correctamente desde sus botones de la cabecera.
+
+## 2026-09-09 — Alineación del acceso a filtros
+
+- Motivo: alinear el botón **Filtros** con el campo de búsqueda de cartera.
+- Archivo: `src/views/manual.py`.
+- Cambio: el botón se alinea con la base del control de búsqueda, en lugar de
+  hacerlo con su rótulo.
+- Impacto contable: ninguno.
+- Validación: demo local recargado y revisión visual confirmada.

@@ -225,7 +225,7 @@ def _render_compact_filters(
         if any(row["estado"] == state for row in invoices)
     )
     current_count = _filter_count(date_limits)
-    search_column, filters_column = st.columns([3.8, 1])
+    search_column, filters_column = st.columns([3.8, 1], vertical_alignment="bottom")
     with search_column:
         term = st.text_input(
             "Buscar en la cartera",
