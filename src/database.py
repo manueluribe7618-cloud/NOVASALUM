@@ -274,16 +274,16 @@ def _cliente_id(
     conexion: sqlite3.Connection,
     empresa_codigo: str,
     nombre: Any,
-    nit: Any,
 ) -> int:
     nombre_limpio = _texto(nombre, "Cliente", obligatorio=True)
-    nit_limpio = _texto(nit, "NIT")
     encontrado = conexion.execute(
         """
         SELECT id FROM clientes
-        WHERE empresa_codigo = ? AND nombre = ? AND nit = ?
+        WHERE empresa_codigo = ? AND nombre = ?
+        ORDER BY id ASC
+        LIMIT 1
         """,
-        (empresa_codigo, nombre_limpio, nit_limpio),
+        (empresa_codigo, nombre_limpio),
     ).fetchone()
     if encontrado:
         return int(encontrado["id"])
@@ -294,7 +294,7 @@ def _cliente_id(
         INSERT INTO clientes (empresa_codigo, nombre, nit, creado_en, actualizado_en)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (empresa_codigo, nombre_limpio, nit_limpio, marca, marca),
+        (empresa_codigo, nombre_limpio, "", marca, marca),
     )
     return int(cursor.lastrowid)
 
@@ -320,7 +320,7 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
         raise ErrorCartera("El total de la factura debe ser mayor que cero.")
 
     with _transaccion(ruta) as conexion:
-        cliente_id = _cliente_id(conexion, empresa, datos.get("cliente"), datos.get("nit"))
+        cliente_id = _cliente_id(conexion, empresa, datos.get("cliente"))
         try:
             cursor = conexion.execute(
                 """

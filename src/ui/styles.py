@@ -24,6 +24,7 @@ def apply_global_styles() -> None:
                 --amber: #d97706;
                 --red: #dc2626;
                 --violet: #7c3aed;
+                --body-font-size: .875rem;
             }
             .stApp, [data-testid="stAppViewContainer"] {
                 background: var(--canvas);
@@ -206,14 +207,66 @@ def apply_global_styles() -> None:
                 border: 1px solid var(--line);
                 border-radius: 12px;
                 overflow: hidden;
+                background: #fff;
+            }
+            [data-testid="stDataFrame"] {
+                background: #fff;
+            }
+            [data-testid="stTextInput"] input,
+            [data-testid="stTextArea"] textarea,
+            [data-testid="stNumberInput"] input,
+            [data-testid="stDateInput"] input {
+                color: var(--ink) !important;
+                background: #fff !important;
+                border: 1px solid #cbd5e1 !important;
+                border-radius: 9px !important;
+            }
+            [data-testid="stTextInput"] input:focus,
+            [data-testid="stTextArea"] textarea:focus,
+            [data-testid="stNumberInput"] input:focus,
+            [data-testid="stDateInput"] input:focus {
+                border-color: var(--blue) !important;
+                box-shadow: 0 0 0 3px rgba(37, 99, 235, .12) !important;
+            }
+            [data-baseweb="select"] > div {
+                color: var(--ink) !important;
+                background: #fff !important;
+                border-color: #cbd5e1 !important;
+                border-radius: 9px !important;
             }
             [data-testid="stButton"] > button {
+                color: var(--ink) !important;
+                background: #fff !important;
+                border: 1px solid #cbd5e1 !important;
                 border-radius: 9px;
+                font-size: var(--body-font-size) !important;
                 font-weight: 700;
+                line-height: 1.25rem !important;
+                box-shadow: 0 1px 2px rgba(15, 23, 42, .05);
+            }
+            [data-testid="stButton"] > button[kind="primary"] {
+                color: var(--blue) !important;
+                border-color: var(--blue) !important;
+                background: #fff !important;
+            }
+            [data-testid="stButton"] > button:hover {
+                color: var(--blue-dark) !important;
+                background: #eff6ff !important;
+                border-color: var(--blue) !important;
             }
             [data-testid="stSegmentedControl"] button {
+                color: var(--ink) !important;
+                background: #fff !important;
+                border: 1px solid #cbd5e1 !important;
                 border-radius: 9px !important;
+                font-size: var(--body-font-size) !important;
                 font-weight: 700 !important;
+                line-height: 1.25rem !important;
+            }
+            [data-testid="stSegmentedControl"] button[aria-pressed="true"] {
+                color: var(--blue-dark) !important;
+                background: #eff6ff !important;
+                border-color: var(--blue) !important;
             }
             @media (max-width: 760px) {
                 .block-container { padding: 1rem .8rem 2rem; }

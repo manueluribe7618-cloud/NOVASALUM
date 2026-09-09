@@ -1,3 +1,4 @@
 streamlit
 pandas
 certifi
+streamlit-aggrid==1.0.5

@@ -34,3 +34,75 @@ autorización de Finanzas o del dueño.
 - Documentación actualizada: `ARRANQUE.md`.
 - Impacto contable: ninguno; esta entrada documenta el alcance confirmado por
   el dueño del proyecto.
+
+## 2026-09-09 — Controles visuales claros
+
+- Motivo: sustituir los controles oscuros por superficies blancas que se
+  distingan del fondo mediante bordes visibles.
+- Archivos: `.streamlit/config.toml` y `src/ui/styles.py`.
+- Cambio: tema claro; botones, selectores, campos y tarjetas de tabla con
+  fondo blanco y bordes grises. Las acciones principales se resaltan con azul
+  en el texto y el borde.
+- Impacto contable: ninguno.
+- Validación: demo local recargado y comprobado visualmente con la cartera
+  manual de muestra.
+
+## 2026-09-09 — Vista general y cartera por cliente
+
+- Motivo: hacer que la vista general de facturas no quede limitada en altura y
+  permitir revisar cuánto debe cada cliente.
+- Archivo: `src/views/manual.py`.
+- Cambio: la tabla general se extiende según sus filas; se agregó una tabla de
+  clientes con saldo pendiente y un selector buscable con los clientes ya
+  registrados. El selector filtra ambas tablas.
+- Impacto contable: ninguno; son agrupaciones y filtros de lectura sobre los
+  saldos existentes.
+- Validación: pruebas de cartera 3/3 correctas, compilación completa y demo
+  verificado con el cliente Transportes Andinos SAS: se muestran sus dos
+  facturas y su saldo pendiente agregado.
+
+## 2026-09-09 — Tipografía uniforme en controles
+
+- Motivo: mantener el mismo tamaño de fuente en los elementos interactivos;
+  solo los títulos cambian de escala.
+- Archivo: `src/ui/styles.py`.
+- Cambio: tamaño base fijo de 14 px y altura de línea uniforme para botones y
+  el selector segmentado de empresas.
+- Impacto contable: ninguno.
+- Validación: demo local recargado y revisión visual del selector segmentado.
+
+## 2026-09-09 — Filtros ordenados y subpestañas de cartera manual
+
+- Motivo: eliminar un buscador global redundante que aportaba ruido visual y
+  concentrar los controles de consulta debajo de las tarjetas de resumen.
+- Archivos: `src/ui/layout.py`, `src/app_shell.py` y `src/views/manual.py`.
+- Cambio: la cabecera conserva solo el contexto y la acción de registrar
+  abono; el selector de empresa, la búsqueda de clientes y el filtro de
+  facturas se muestran juntos debajo de los indicadores. La cartera ahora se
+  organiza en las subpestañas **General** y **Clientes y saldo pendiente**.
+  También se retiraron los contenedores vacíos que se mostraban antes de cada
+  tabla y no cumplían ninguna función.
+- Impacto contable: ninguno; se reordena la presentación de los mismos datos
+  manuales y no se modifican cálculos, facturas ni abonos.
+- Validación: pruebas de cartera 3/3 correctas, compilación completa, revisión
+  de formato de Git y demo local recargado. Se confirmó que ya no hay selector
+  global ni contenedores vacíos y que las dos subpestañas están disponibles.
+
+## 2026-09-09 — Filtros compactos y cuadrículas de cartera manual
+
+- Motivo: ofrecer filtros comparables a los de Excel sin llenar la pantalla de
+  segmentadores, mejorar la jerarquía de las tablas y retirar el NIT del flujo
+  manual de registro.
+- Archivos: `src/views/manual.py`, `src/ui/layout.py`,
+  `src/ui/components.py`, `src/database.py`, `tests/test_database.py` y
+  `requirements.txt`.
+- Cambio: búsqueda general visible y un único panel desplegable **Filtros**;
+  dentro se agrupan empresa, cliente, estado, fecha y saldo. Las tablas de
+  cartera usan `streamlit-aggrid`, con encabezados azules, ordenamiento y
+  filtros por columna. El NIT ya no se solicita, muestra ni se usa para crear
+  clientes manuales nuevos; se conserva la columna interna solo para no
+  alterar registros históricos ni datos de Siigo.
+- Impacto contable: ninguno. Los filtros son de lectura; totales, impuestos,
+  saldos, abonos y reglas FIFO no cambian.
+- Validación: pruebas de cartera 3/3 correctas, compilación completa y demo
+  local revisado con la tabla de biblioteca, el buscador y el botón Filtros.

@@ -29,7 +29,6 @@ class CarteraManualTests(unittest.TestCase):
                 "fecha": fecha,
                 "vencimiento": fecha + timedelta(days=30),
                 "cliente": "Cliente de prueba SAS",
-                "nit": "900000001-1",
                 "descripcion": "Servicio de prueba",
                 "placas": "ABC123",
                 "subtotal_cop": subtotal,
@@ -108,6 +107,11 @@ class CarteraManualTests(unittest.TestCase):
                 self.ruta,
             )
         self.assertEqual(db.obtener_factura(factura, self.ruta)["saldo_cop"], 30_000)
+
+    def test_factura_manual_no_registra_nit(self) -> None:
+        factura = self.crear_factura("400", self.hoy)
+
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["nit"], "")
 
 
 if __name__ == "__main__":

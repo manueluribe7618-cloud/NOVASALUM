@@ -139,12 +139,12 @@ def invoice_label(row: Mapping[str, Any]) -> str:
 
 
 def filter_invoices(rows: list[dict[str, Any]], term: str) -> list[dict[str, Any]]:
-    """Filtra facturas por los mismos campos de la búsqueda global actual."""
+    """Filtra facturas manuales por sus datos operativos visibles."""
 
     query = str(term or "").strip().casefold()
     if not query:
         return rows
-    fields = ("factura", "cliente", "nit", "descripcion", "placas")
+    fields = ("factura", "cliente", "descripcion", "placas")
     return [
         row
         for row in rows

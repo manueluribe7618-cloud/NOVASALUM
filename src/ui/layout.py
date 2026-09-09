@@ -11,7 +11,7 @@ import html
 import streamlit as st
 
 from src import database as db
-from src.ui.components import activity_summary, company_label, invoice_label
+from src.ui.components import activity_summary
 
 
 ALL_COMPANIES = "TODAS"
@@ -51,8 +51,18 @@ def render_sidebar(current_view: str) -> str:
     return selected_view
 
 
-def render_page_header() -> tuple[str, str, bool]:
-    """Muestra cabecera global y retorna empresa, búsqueda y acción de abono."""
+def active_company() -> str:
+    """Obtiene la empresa seleccionada dentro del panel de filtros manual."""
+
+    company = st.session_state.get("filtro_empresa_manual", ALL_COMPANIES)
+    if company not in {ALL_COMPANIES, *db.EMPRESAS}:
+        company = ALL_COMPANIES
+    st.session_state["empresa_activa"] = company
+    return company
+
+
+def render_page_header() -> bool:
+    """Muestra la cabecera global y devuelve si se solicitó un abono."""
 
     left, right = st.columns([4, 1.3], vertical_alignment="center")
     with left:
@@ -70,31 +80,4 @@ def render_page_header() -> tuple[str, str, bool]:
             "＋ Registrar abono", type="primary", use_container_width=True
         )
 
-    current_company = st.session_state.get("empresa_activa", ALL_COMPANIES)
-    if current_company not in {ALL_COMPANIES, *db.EMPRESAS}:
-        current_company = ALL_COMPANIES
-    company = st.segmented_control(
-        "Empresa",
-        [ALL_COMPANIES, *db.EMPRESAS],
-        default=current_company,
-        format_func=company_label,
-        key="selector_empresa_global",
-        width="stretch",
-        label_visibility="collapsed",
-    )
-    if company is None:
-        company = current_company
-    st.session_state["empresa_activa"] = company
-
-    invoices = db.listar_facturas(None if company == ALL_COMPANIES else company)
-    options = [""] + [invoice_label(invoice) for invoice in invoices]
-    match = st.selectbox(
-        "Buscar factura o cliente",
-        options,
-        index=0,
-        placeholder="Buscar por factura, cliente, NIT o placa…",
-        key="buscador_global",
-        label_visibility="collapsed",
-    )
-    global_term = match.split(" · ", 1)[0] if match else ""
-    return company, global_term, request_payment
+    return request_payment
