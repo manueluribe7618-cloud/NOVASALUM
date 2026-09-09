@@ -1,0 +1,226 @@
+"""Estilos globales de la interfaz Streamlit."""
+
+import streamlit as st
+
+
+def apply_global_styles() -> None:
+    """Inyecta la hoja de estilos global de NOVASALUM.
+
+    El contenido se conserva separado del punto de arranque para que las
+    vistas y los componentes no dependan de ``app.py``.
+    """
+
+    st.markdown(
+        """
+        <style>
+            :root {
+                --ink: #172033;
+                --muted: #65738a;
+                --canvas: #f8fafc;
+                --line: #e5eaf1;
+                --blue: #2563eb;
+                --blue-dark: #1e3a8a;
+                --green: #16a34a;
+                --amber: #d97706;
+                --red: #dc2626;
+                --violet: #7c3aed;
+            }
+            .stApp, [data-testid="stAppViewContainer"] {
+                background: var(--canvas);
+                color: var(--ink);
+            }
+            [data-testid="stHeader"] {
+                background: rgba(248, 250, 252, .92);
+            }
+            [data-testid="stSidebar"] {
+                background: #ffffff;
+                border-right: 1px solid var(--line);
+            }
+            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+                color: var(--muted);
+            }
+            .block-container {
+                max-width: 1540px;
+                padding-top: 2rem;
+                padding-bottom: 3rem;
+            }
+            h1, h2, h3 {
+                color: var(--ink) !important;
+                letter-spacing: -0.025em;
+            }
+            .brand {
+                display: flex;
+                align-items: center;
+                gap: .7rem;
+                font-weight: 800;
+                letter-spacing: -.03em;
+                color: var(--ink);
+                font-size: 1.2rem;
+            }
+            .brand-mark {
+                display: inline-grid;
+                width: 30px;
+                height: 30px;
+                place-items: center;
+                border-radius: 9px;
+                color: white;
+                background: linear-gradient(135deg, #1e3a8a, #2563eb);
+                box-shadow: 0 6px 14px rgba(37, 99, 235, .22);
+            }
+            .eyebrow {
+                color: var(--muted);
+                font-size: .78rem;
+                font-weight: 700;
+                letter-spacing: .09em;
+                text-transform: uppercase;
+                margin-bottom: .35rem;
+            }
+            .page-subtitle {
+                color: var(--muted);
+                margin-top: -.35rem;
+                margin-bottom: 1.15rem;
+                font-size: .95rem;
+            }
+            .kpi-card {
+                min-height: 122px;
+                padding: 1.05rem 1.15rem;
+                border: 1px solid var(--line);
+                border-radius: 16px;
+                background: #fff;
+                box-shadow: 0 6px 18px rgba(15, 23, 42, .045);
+            }
+            .kpi-label {
+                color: var(--muted);
+                font-size: .8rem;
+                font-weight: 700;
+                letter-spacing: .025em;
+                text-transform: uppercase;
+            }
+            .kpi-value {
+                margin-top: .5rem;
+                color: var(--ink);
+                font-size: 1.52rem;
+                font-weight: 800;
+                line-height: 1.15;
+                letter-spacing: -.035em;
+            }
+            .kpi-detail {
+                margin-top: .45rem;
+                color: var(--muted);
+                font-size: .82rem;
+            }
+            .kpi-card.saldo {
+                border-color: rgba(37, 99, 235, .28);
+                background: linear-gradient(135deg, #eff6ff, #ffffff 72%);
+            }
+            .kpi-card.saldo .kpi-value { color: var(--blue); }
+            .surface {
+                padding: 1.15rem;
+                border: 1px solid var(--line);
+                border-radius: 16px;
+                background: #fff;
+                box-shadow: 0 5px 16px rgba(15, 23, 42, .035);
+            }
+            .surface-title {
+                color: var(--ink);
+                font-weight: 800;
+                font-size: 1rem;
+                letter-spacing: -.015em;
+            }
+            .surface-subtitle {
+                margin-top: .18rem;
+                color: var(--muted);
+                font-size: .83rem;
+            }
+            .badge {
+                display: inline-flex;
+                align-items: center;
+                width: fit-content;
+                padding: .27rem .55rem;
+                border-radius: 999px;
+                font-size: .75rem;
+                font-weight: 800;
+                white-space: nowrap;
+            }
+            .badge-verde { background: #dcfce7; color: #166534; }
+            .badge-amarillo { background: #fef3c7; color: #92400e; }
+            .badge-azul { background: #dbeafe; color: #1d4ed8; }
+            .badge-rojo { background: #fee2e2; color: #b91c1c; }
+            .badge-gris { background: #e2e8f0; color: #475569; }
+            .plate {
+                display: inline-block;
+                margin: 0 .28rem .28rem 0;
+                padding: .28rem .48rem;
+                color: #334155;
+                background: #f1f5f9;
+                border: 1px solid #e2e8f0;
+                border-radius: 7px;
+                font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                font-size: .78rem;
+                font-weight: 700;
+            }
+            .split-card {
+                min-height: 305px;
+                padding: 1rem;
+                background: #fff;
+                border: 1px solid var(--line);
+                border-radius: 14px;
+            }
+            .split-card.manual { border-top: 4px solid var(--blue); }
+            .split-card.siigo { border-top: 4px solid var(--violet); }
+            .split-title {
+                margin: 0 0 .85rem;
+                font-size: .92rem;
+                font-weight: 800;
+            }
+            .split-row {
+                display: flex;
+                justify-content: space-between;
+                gap: 1rem;
+                padding: .52rem 0;
+                border-bottom: 1px solid #f0f3f7;
+                font-size: .86rem;
+            }
+            .split-row span { color: var(--muted); }
+            .split-row strong { color: var(--ink); text-align: right; }
+            .empty-state {
+                padding: 2.2rem 1.2rem;
+                border: 1px dashed #cbd5e1;
+                border-radius: 16px;
+                text-align: center;
+                background: rgba(255,255,255,.55);
+                color: var(--muted);
+            }
+            .activity {
+                padding: .6rem 0;
+                border-bottom: 1px solid #eef2f6;
+                font-size: .82rem;
+            }
+            .activity:last-child { border-bottom: 0; }
+            [data-testid="stDataFrame"] {
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                overflow: hidden;
+            }
+            [data-testid="stDataEditor"] {
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                overflow: hidden;
+            }
+            [data-testid="stButton"] > button {
+                border-radius: 9px;
+                font-weight: 700;
+            }
+            [data-testid="stSegmentedControl"] button {
+                border-radius: 9px !important;
+                font-weight: 700 !important;
+            }
+            @media (max-width: 760px) {
+                .block-container { padding: 1rem .8rem 2rem; }
+                .kpi-value { font-size: 1.25rem; }
+                .kpi-card { min-height: 104px; padding: .85rem; }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
