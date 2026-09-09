@@ -106,3 +106,18 @@ autorización de Finanzas o del dueño.
   saldos, abonos y reglas FIFO no cambian.
 - Validación: pruebas de cartera 3/3 correctas, compilación completa y demo
   local revisado con la tabla de biblioteca, el buscador y el botón Filtros.
+
+## 2026-09-09 — Acciones de cartera en la cabecera
+
+- Motivo: concentrar las acciones frecuentes en la misma ubicación y estética
+  de **Registrar abono**, sin añadir controles debajo de la tabla.
+- Archivos: `src/ui/layout.py`, `src/app_shell.py` y `src/views/manual.py`.
+- Cambio: **Registrar factura**, **Editar factura** y **Registrar abono** se
+  muestran en el bloque superior derecho de la cartera manual. Factura y
+  edición se abren en ventanas de trabajo, por lo que la tabla conserva una
+  apariencia limpia.
+- Impacto contable: ninguno; se reutilizan los mismos formularios y las mismas
+  validaciones de facturas, impuestos, abonos y auditoría.
+- Validación: pruebas de cartera 4/4 correctas, compilación completa y demo
+  local revisado. Se comprobó que los formularios de registro y edición abren
+  correctamente desde sus botones de la cabecera.

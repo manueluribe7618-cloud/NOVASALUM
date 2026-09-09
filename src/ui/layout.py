@@ -7,6 +7,7 @@ reglas de negocio viven en módulos separados.
 from __future__ import annotations
 
 import html
+from dataclasses import dataclass
 
 import streamlit as st
 
@@ -16,6 +17,15 @@ from src.ui.components import activity_summary
 
 ALL_COMPANIES = "TODAS"
 VIEWS = ("Cartera manual", "Espejo Siigo", "Conciliación")
+
+
+@dataclass(frozen=True)
+class HeaderActions:
+    """Acciones solicitadas desde los botones de la cabecera."""
+
+    register_payment: bool = False
+    register_invoice: bool = False
+    edit_invoice: bool = False
 
 
 def render_sidebar(current_view: str) -> str:
@@ -61,8 +71,8 @@ def active_company() -> str:
     return company
 
 
-def render_page_header() -> bool:
-    """Muestra la cabecera global y devuelve si se solicitó un abono."""
+def render_page_header(*, manual_actions: bool) -> HeaderActions:
+    """Muestra la cabecera y concentra las acciones de cartera manual."""
 
     left, right = st.columns([4, 1.3], vertical_alignment="center")
     with left:
@@ -76,8 +86,19 @@ def render_page_header() -> bool:
             unsafe_allow_html=True,
         )
     with right:
-        request_payment = st.button(
+        register_invoice = False
+        edit_invoice = False
+        if manual_actions:
+            register_invoice = st.button(
+                "＋ Registrar factura", type="primary", use_container_width=True
+            )
+            edit_invoice = st.button("Editar factura", use_container_width=True)
+        register_payment = st.button(
             "＋ Registrar abono", type="primary", use_container_width=True
         )
 
-    return request_payment
+    return HeaderActions(
+        register_payment=register_payment,
+        register_invoice=register_invoice,
+        edit_invoice=edit_invoice,
+    )

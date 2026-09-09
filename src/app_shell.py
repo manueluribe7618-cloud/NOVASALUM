@@ -30,15 +30,19 @@ def run_application() -> None:
     current_view = st.session_state.get("vista", "Cartera manual")
     view = render_sidebar(current_view)
     st.session_state["vista"] = view
-    request_payment = render_page_header()
+    actions = render_page_header(manual_actions=view == "Cartera manual")
     company = active_company()
     st.write("")
 
-    if request_payment:
+    if actions.register_payment:
         show_payment_dialog()
 
     if view == "Cartera manual":
-        render_manual_portfolio(company)
+        render_manual_portfolio(
+            company,
+            request_invoice=actions.register_invoice,
+            request_edit=actions.edit_invoice,
+        )
     elif view == "Espejo Siigo":
         render_siigo_mirror(company)
     else:

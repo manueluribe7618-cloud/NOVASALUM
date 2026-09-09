@@ -398,10 +398,15 @@ def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> None:
         _render_grid(table.drop(columns="_saldo"), key="tabla_clientes_manual")
 
 
-def _render_invoice_form(active_company: str) -> None:
+def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
     """Renderiza y procesa el formulario de creación de una factura manual."""
 
-    with st.expander("＋ Registrar nueva factura", expanded=False):
+    container = (
+        st.expander("＋ Registrar nueva factura", expanded=False)
+        if use_expander
+        else st.container()
+    )
+    with container:
         render_section(
             "Nueva factura manual",
             "Los valores se guardan como pesos enteros, sin centavos.",
@@ -477,12 +482,19 @@ def _render_invoice_form(active_company: str) -> None:
                 st.rerun()
 
 
-def _render_quick_edit(rows: list[dict[str, Any]]) -> None:
+def _render_quick_edit(rows: list[dict[str, Any]], *, use_expander: bool) -> None:
     """Permite editar campos operativos o anular una factura existente."""
 
     if not rows:
+        if not use_expander:
+            st.info("No hay facturas disponibles para editar con este filtro.")
         return
-    with st.expander("Editar factura en línea", expanded=False):
+    container = (
+        st.expander("Editar factura en línea", expanded=False)
+        if use_expander
+        else st.container()
+    )
+    with container:
         render_section(
             "Ajustes rápidos",
             "Edita el detalle, las placas o los impuestos sin salir de la cartera.",
@@ -564,7 +576,12 @@ def _render_quick_edit(rows: list[dict[str, Any]]) -> None:
                         st.rerun()
 
 
-def render_manual_portfolio(company: str) -> None:
+def render_manual_portfolio(
+    company: str,
+    *,
+    request_invoice: bool = False,
+    request_edit: bool = False,
+) -> None:
     """Renderiza la cartera manual para una empresa.
 
     Args:
@@ -574,6 +591,10 @@ def render_manual_portfolio(company: str) -> None:
     _render_kpis(company)
     st.write("")
     invoices = db.listar_facturas(None if company == TODAS else company)
+    if request_invoice:
+        show_invoice_dialog(company)
+    if request_edit:
+        show_edit_invoice_dialog(invoices)
     filters = _render_compact_filters(invoices, company)
     filtered = _filter_rows(invoices, filters)
 
@@ -600,10 +621,22 @@ def render_manual_portfolio(company: str) -> None:
                 db.cargar_datos_demostracion()
                 st.success("Muestra cargada. Puedes editarla, registrar abonos y revisar la conciliación.")
                 st.rerun()
-        _render_invoice_form(company)
-        _render_quick_edit(filtered)
     with customers_tab:
         _render_customer_debt(company, _filter_customers(invoices, filters.customers))
+
+
+@st.dialog("Registrar nueva factura", width="large")
+def show_invoice_dialog(active_company: str) -> None:
+    """Abre el registro de factura desde la cabecera, sin ocupar la tabla."""
+
+    _render_invoice_form(active_company, use_expander=False)
+
+
+@st.dialog("Editar factura", width="large")
+def show_edit_invoice_dialog(invoices: list[dict[str, Any]]) -> None:
+    """Abre la edición de una factura desde la cabecera."""
+
+    _render_quick_edit(invoices, use_expander=False)
 
 
 @st.dialog("Registrar abono", width="large")
@@ -744,4 +777,9 @@ def show_payment_dialog() -> None:
             st.rerun()
 
 
-__all__ = ["render_manual_portfolio", "show_payment_dialog"]
+__all__ = [
+    "render_manual_portfolio",
+    "show_edit_invoice_dialog",
+    "show_invoice_dialog",
+    "show_payment_dialog",
+]
