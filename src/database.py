@@ -352,12 +352,20 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
                 f"La factura {prefijo}{numero} ya existe para {empresa}."
             ) from exc
         factura_id = int(cursor.lastrowid)
+        audit_detail: dict[str, Any] = {
+            "empresa": empresa,
+            "factura": f"{prefijo}{numero}",
+            **valores,
+        }
+        tax_configuration = datos.get("impuestos_config")
+        if isinstance(tax_configuration, Mapping):
+            audit_detail["impuestos_config"] = dict(tax_configuration)
         _registrar(
             conexion,
             "factura_manual",
             factura_id,
             "CREADA",
-            {"empresa": empresa, "factura": f"{prefijo}{numero}", **valores},
+            audit_detail,
         )
         return factura_id
 

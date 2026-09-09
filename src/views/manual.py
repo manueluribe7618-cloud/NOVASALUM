@@ -17,6 +17,7 @@ import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 from src import database as db
+from src.taxes import TAX_COMPONENTS, TAX_DEFAULTS, TAX_MODE_LABELS, TAX_MODES, calculate_tax
 from src.ui.components import (
     EMPRESAS,
     ESTADO_META,
@@ -37,6 +38,20 @@ from src.ui.components import (
 
 
 BALANCE_FILTERS = ("Todos", "Con saldo pendiente", "Saldo en cero")
+MONTH_LABELS = {
+    1: "Enero",
+    2: "Febrero",
+    3: "Marzo",
+    4: "Abril",
+    5: "Mayo",
+    6: "Junio",
+    7: "Julio",
+    8: "Agosto",
+    9: "Septiembre",
+    10: "Octubre",
+    11: "Noviembre",
+    12: "Diciembre",
+}
 GRID_CSS = {
     ".ag-root-wrapper": {
         "border": "1px solid #d6dfeb",
@@ -64,14 +79,21 @@ class ManualFilters:
     term: str
     customers: tuple[tuple[str, int], ...]
     states: tuple[str, ...]
-    date_range: tuple[dt.date, dt.date] | None
+    year: int | None
+    month: int | None
     balance: str
 
 
-def _render_kpis(company: str) -> None:
+def _render_kpis(invoices: list[dict[str, Any]]) -> None:
     """Muestra el resumen financiero de la cartera manual seleccionada."""
 
-    summary = db.resumen_cartera(None if company == TODAS else company)
+    summary = {
+        "total_facturado_cop": sum(int(row["total_cop"]) for row in invoices),
+        "total_abonos_cop": sum(int(row["abonos_cop"]) for row in invoices),
+        "saldo_cartera_cop": sum(int(row["saldo_cop"]) for row in invoices),
+        "facturas_pendientes": sum(int(row["saldo_cop"]) > 0 for row in invoices),
+        "facturas_vencidas": sum(row["estado"] == "VENCIDA" for row in invoices),
+    }
     columns = st.columns(3)
     with columns[0]:
         render_kpi_card(
@@ -166,11 +188,42 @@ def _customer_options(
     return dict(sorted(options.items(), key=lambda item: item[0].casefold()))
 
 
-def _date_limits(invoices: list[dict[str, Any]]) -> tuple[dt.date, dt.date] | None:
-    """Obtiene el rango completo de fechas disponible para el filtro."""
+def _invoice_date(invoice: dict[str, Any]) -> dt.date:
+    """Convierte una fecha de persistencia a un objeto fecha de interfaz."""
 
-    dates = [dt.date.fromisoformat(str(row["fecha"])[:10]) for row in invoices]
-    return (min(dates), max(dates)) if dates else None
+    return dt.date.fromisoformat(str(invoice["fecha"])[:10])
+
+
+def _available_years(invoices: list[dict[str, Any]]) -> tuple[int, ...]:
+    """Devuelve los años facturados, de más reciente a más antiguo."""
+
+    return tuple(sorted({_invoice_date(invoice).year for invoice in invoices}, reverse=True))
+
+
+def _selected_period() -> tuple[int | None, int | None]:
+    """Lee el período actual antes de dibujar los indicadores."""
+
+    year = st.session_state.get("filtro_anio_manual")
+    month = st.session_state.get("filtro_mes_manual")
+    return (
+        year if isinstance(year, int) else None,
+        month if isinstance(month, int) and month in MONTH_LABELS else None,
+    )
+
+
+def _filter_period(
+    invoices: list[dict[str, Any]],
+    year: int | None,
+    month: int | None,
+) -> list[dict[str, Any]]:
+    """Limita facturas por año y mes sin modificar ningún saldo."""
+
+    return [
+        invoice
+        for invoice in invoices
+        if (year is None or _invoice_date(invoice).year == year)
+        and (month is None or _invoice_date(invoice).month == month)
+    ]
 
 
 def _clear_manual_filters() -> None:
@@ -180,7 +233,8 @@ def _clear_manual_filters() -> None:
         "filtro_facturas_manual",
         "filtro_clientes_manual",
         "filtro_estados_manual",
-        "filtro_fechas_manual",
+        "filtro_anio_manual",
+        "filtro_mes_manual",
         "filtro_saldo_manual",
     ):
         st.session_state.pop(key, None)
@@ -193,7 +247,7 @@ def _reset_customers_for_company() -> None:
     st.session_state["filtro_clientes_manual"] = []
 
 
-def _filter_count(date_limits: tuple[dt.date, dt.date] | None) -> int:
+def _filter_count() -> int:
     """Cuenta filtros activos para informar sin añadir ruido visual."""
 
     active = 0
@@ -205,9 +259,10 @@ def _filter_count(date_limits: tuple[dt.date, dt.date] | None) -> int:
         active += 1
     if st.session_state.get("filtro_saldo_manual", BALANCE_FILTERS[0]) != BALANCE_FILTERS[0]:
         active += 1
-    selected_dates = st.session_state.get("filtro_fechas_manual")
-    if date_limits and isinstance(selected_dates, (tuple, list)) and len(selected_dates) == 2:
-        active += tuple(selected_dates) != date_limits
+    if st.session_state.get("filtro_anio_manual") is not None:
+        active += 1
+    if st.session_state.get("filtro_mes_manual") is not None:
+        active += 1
     return active
 
 
@@ -218,13 +273,13 @@ def _render_compact_filters(
     """Muestra búsqueda y un único panel de filtros, inspirado en Excel."""
 
     customer_options = _customer_options(invoices)
-    date_limits = _date_limits(invoices)
+    years = _available_years(invoices)
     state_options = tuple(
         state
         for state in ("PENDIENTE", "ABONADA", "VENCIDA", "PAGADA")
         if any(row["estado"] == state for row in invoices)
     )
-    current_count = _filter_count(date_limits)
+    current_count = _filter_count()
     search_column, filters_column = st.columns([3.8, 1], vertical_alignment="bottom")
     with search_column:
         term = st.text_input(
@@ -250,25 +305,30 @@ def _render_compact_filters(
                 "Clientes",
                 list(customer_options),
                 help="Puedes escribir para buscar uno o varios clientes registrados.",
+                placeholder="Selecciona clientes",
                 key="filtro_clientes_manual",
             )
             states = st.multiselect(
                 "Estado",
                 state_options,
                 format_func=lambda state: ESTADO_META[state][0],
+                placeholder="Selecciona estados",
                 key="filtro_estados_manual",
             )
-            selected_dates: tuple[dt.date, dt.date] | None = None
-            if date_limits:
-                selected_date_value = st.date_input(
-                    "Fecha de emisión",
-                    value=date_limits,
-                    min_value=date_limits[0],
-                    max_value=date_limits[1],
-                    key="filtro_fechas_manual",
-                )
-                if isinstance(selected_date_value, (tuple, list)) and len(selected_date_value) == 2:
-                    selected_dates = (selected_date_value[0], selected_date_value[1])
+            year = st.selectbox(
+                "Año de facturación",
+                [None, *years],
+                format_func=lambda value: "Todos los años" if value is None else str(value),
+                key="filtro_anio_manual",
+            )
+            month = st.selectbox(
+                "Mes de facturación",
+                [None, *MONTH_LABELS],
+                format_func=lambda value: "Todos los meses"
+                if value is None
+                else MONTH_LABELS[value],
+                key="filtro_mes_manual",
+            )
             balance = st.selectbox(
                 "Saldo",
                 BALANCE_FILTERS,
@@ -284,7 +344,8 @@ def _render_compact_filters(
         term=term,
         customers=tuple(customer_options[label] for label in selected_labels),
         states=tuple(states),
-        date_range=selected_dates,
+        year=year,
+        month=month,
         balance=balance,
     )
 
@@ -305,13 +366,7 @@ def _filter_rows(
         ]
     if filters.states:
         rows = [row for row in rows if row["estado"] in filters.states]
-    if filters.date_range:
-        start, end = filters.date_range
-        rows = [
-            row
-            for row in rows
-            if start <= dt.date.fromisoformat(str(row["fecha"])[:10]) <= end
-        ]
+    rows = _filter_period(rows, filters.year, filters.month)
     if filters.balance == "Con saldo pendiente":
         rows = [row for row in rows if int(row["saldo_cop"]) > 0]
     elif filters.balance == "Saldo en cero":
@@ -398,6 +453,47 @@ def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> None:
         _render_grid(table.drop(columns="_saldo"), key="tabla_clientes_manual")
 
 
+def _render_tax_control(component: str, subtotal: int) -> tuple[int, dict[str, Any]]:
+    """Configura un concepto tributario sin obligarlo para cada factura."""
+
+    label = TAX_COMPONENTS[component]
+    defaults = TAX_DEFAULTS[component]
+    mode = st.selectbox(
+        label,
+        TAX_MODES,
+        index=TAX_MODES.index(str(defaults["mode"])),
+        format_func=TAX_MODE_LABELS.__getitem__,
+        key=f"factura_{component}_modo",
+    )
+    configured_value: float | int = 0
+    if mode == "PORCENTAJE":
+        configured_value = st.number_input(
+            f"{label} (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(defaults["value"]),
+            step=0.01,
+            format="%.2f",
+            key=f"factura_{component}_porcentaje",
+        )
+    elif mode == "VALOR_FIJO":
+        configured_value = st.number_input(
+            f"{label} (COP)",
+            min_value=0,
+            value=int(defaults["value"]),
+            step=1_000,
+            format="%d",
+            key=f"factura_{component}_valor",
+        )
+    calculation = calculate_tax(subtotal, mode, configured_value)
+    st.caption(f"Calculado: {format_currency(calculation.amount_cop)}")
+    return calculation.amount_cop, {
+        "modo": calculation.mode,
+        "valor_configurado": str(calculation.configured_value),
+        "monto_calculado_cop": calculation.amount_cop,
+    }
+
+
 def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
     """Renderiza y procesa el formulario de creación de una factura manual."""
 
@@ -441,19 +537,22 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 max_chars=1000,
             )
             plates = st.text_input("Placas", placeholder="SOQ766, TAW897")
-            amount_a, amount_b, amount_c, amount_d = st.columns(4)
-            with amount_a:
-                subtotal = st.number_input(
-                    "Subtotal", min_value=0, step=1_000, value=0, format="%d"
+            subtotal = st.number_input(
+                "Subtotal", min_value=0, step=1_000, value=0, format="%d"
+            )
+            st.markdown("##### Impuestos y retenciones")
+            st.caption(
+                "Cada concepto puede omitirse, calcularse por porcentaje o registrarse como valor fijo."
+            )
+            iva_column, withholding_column, ica_column = st.columns(3)
+            with iva_column:
+                iva, iva_config = _render_tax_control("iva", int(subtotal))
+            with withholding_column:
+                retefuente, retefuente_config = _render_tax_control(
+                    "retefuente", int(subtotal)
                 )
-            with amount_b:
-                iva = st.number_input("IVA", min_value=0, step=1_000, value=0, format="%d")
-            with amount_c:
-                retefuente = st.number_input(
-                    "Retefuente", min_value=0, step=1_000, value=0, format="%d"
-                )
-            with amount_d:
-                ica = st.number_input("ICA", min_value=0, step=1_000, value=0, format="%d")
+            with ica_column:
+                ica, ica_config = _render_tax_control("ica", int(subtotal))
             total = int(subtotal) + int(iva) - int(retefuente) - int(ica)
             st.caption(f"Total a cobrar: {format_currency(total)}")
             save = st.form_submit_button("Guardar factura", type="primary")
@@ -473,6 +572,11 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                         "iva_cop": iva,
                         "retefuente_cop": retefuente,
                         "ica_cop": ica,
+                        "impuestos_config": {
+                            "iva": iva_config,
+                            "retefuente": retefuente_config,
+                            "ica": ica_config,
+                        },
                     }
                 )
             except db.ErrorCartera as exc:
@@ -588,9 +692,10 @@ def render_manual_portfolio(
         company: Código de empresa o ``TODAS``.
     """
 
-    _render_kpis(company)
-    st.write("")
     invoices = db.listar_facturas(None if company == TODAS else company)
+    selected_year, selected_month = _selected_period()
+    _render_kpis(_filter_period(invoices, selected_year, selected_month))
+    st.write("")
     if request_invoice:
         show_invoice_dialog(company)
     if request_edit:

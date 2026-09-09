@@ -130,3 +130,21 @@ autorización de Finanzas o del dueño.
   hacerlo con su rótulo.
 - Impacto contable: ninguno.
 - Validación: demo local recargado y revisión visual confirmada.
+
+## 2026-09-09 — Impuestos opcionales y análisis por período
+
+- Motivo: permitir que cada factura aplique IVA, retención e ICA solo cuando
+  corresponda, y facilitar el análisis de facturación por año o mes.
+- Archivos: `src/taxes.py`, `src/views/manual.py`, `src/database.py` y
+  `tests/test_taxes.py`.
+- Cambio: se creó un motor tributario separado. Cada concepto permite **No
+  aplica**, **Porcentaje sobre subtotal** o **Valor fijo (COP)**; las tasas
+  predeterminadas se centralizan en `src/taxes.py` para configurarlas después.
+  La regla utilizada queda incluida en la auditoría de la factura. El panel
+  compacto de filtros ahora contiene año y mes de facturación; esos filtros
+  actualizan la tabla y los indicadores superiores.
+- Impacto contable: los importes finales almacenados y la fórmula permanecen
+  iguales: `subtotal + IVA − retefuente − ICA`; el saldo sigue siendo el total
+  menos los abonos aplicados.
+- Validación: 8 pruebas correctas, compilación completa y demo local revisado
+  con el formulario de impuestos y los filtros de año y mes.
