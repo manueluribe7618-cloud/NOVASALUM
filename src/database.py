@@ -278,13 +278,27 @@ def _cliente_id(
 ) -> int:
     nombre_limpio = _texto(nombre, "Cliente", obligatorio=True)
     nit_limpio = _texto(nit, "NIT")
-    encontrado = conexion.execute(
-        """
-        SELECT id FROM clientes
-        WHERE empresa_codigo = ? AND nombre = ? AND nit = ?
-        """,
-        (empresa_codigo, nombre_limpio, nit_limpio),
-    ).fetchone()
+    if nit_limpio:
+        encontrado = conexion.execute(
+            """
+            SELECT id FROM clientes
+            WHERE empresa_codigo = ? AND nombre = ? AND nit = ?
+            """,
+            (empresa_codigo, nombre_limpio, nit_limpio),
+        ).fetchone()
+    else:
+        # La pantalla trabaja por nombre de cliente. Si una cartera antigua
+        # conserva NIT, reutiliza ese cliente en vez de crear un duplicado
+        # invisible para el usuario.
+        encontrado = conexion.execute(
+            """
+            SELECT id FROM clientes
+            WHERE empresa_codigo = ? AND nombre = ? COLLATE NOCASE
+            ORDER BY id
+            LIMIT 1
+            """,
+            (empresa_codigo, nombre_limpio),
+        ).fetchone()
     if encontrado:
         return int(encontrado["id"])
 
@@ -368,8 +382,9 @@ def _factura_para_editar(
 ) -> sqlite3.Row:
     fila = conexion.execute(
         """
-        SELECT f.*, COALESCE(SUM(a.monto_cop), 0) AS abonos_cop
+        SELECT f.*, c.nombre AS cliente, COALESCE(SUM(a.monto_cop), 0) AS abonos_cop
         FROM facturas_manual f
+        INNER JOIN clientes c ON c.id = f.cliente_id
         LEFT JOIN aplicaciones_abono a ON a.factura_id = f.id
         WHERE f.id = ?
         GROUP BY f.id
@@ -393,6 +408,21 @@ def actualizar_campos_factura(
     inicializar(ruta)
     with _transaccion(ruta) as conexion:
         anterior = _factura_para_editar(conexion, int(factura_id))
+        empresa = _empresa(datos.get("empresa_codigo", anterior["empresa_codigo"]))
+        cliente_id = _cliente_id(
+            conexion,
+            empresa,
+            datos.get("cliente", anterior["cliente"]),
+            datos.get("nit", ""),
+        )
+        cambia_asignacion = (
+            empresa != str(anterior["empresa_codigo"])
+            or cliente_id != int(anterior["cliente_id"])
+        )
+        if cambia_asignacion and int(anterior["abonos_cop"]) > 0:
+            raise ErrorCartera(
+                "No se puede cambiar empresa o cliente de una factura con abonos aplicados."
+            )
         valores = {
             "subtotal_cop": _pesos(datos.get("subtotal_cop"), "Subtotal"),
             "iva_cop": _pesos(datos.get("iva_cop", 0), "IVA"),
@@ -415,29 +445,36 @@ def actualizar_campos_factura(
         prefijo = _texto(datos.get("prefijo", anterior["prefijo"]), "Prefijo").upper()
         numero = _texto(datos.get("numero", anterior["numero"]), "Número de factura").upper()
 
-        conexion.execute(
-            """
+        try:
+            conexion.execute(
+                """
             UPDATE facturas_manual
-            SET prefijo = ?, numero = ?, fecha = ?, vencimiento = ?,
+            SET empresa_codigo = ?, cliente_id = ?, prefijo = ?, numero = ?, fecha = ?, vencimiento = ?,
                 descripcion = ?, placas = ?, subtotal_cop = ?, iva_cop = ?,
                 retefuente_cop = ?, ica_cop = ?, actualizada_en = ?
             WHERE id = ?
-            """,
-            (
-                prefijo,
-                numero,
-                fecha,
-                vencimiento,
-                _texto(datos.get("descripcion", anterior["descripcion"]), "Detalle del servicio"),
-                _texto(datos.get("placas", anterior["placas"]), "Placas"),
-                valores["subtotal_cop"],
-                valores["iva_cop"],
-                valores["retefuente_cop"],
-                valores["ica_cop"],
-                _ahora(),
-                int(factura_id),
-            ),
-        )
+                """,
+                (
+                    empresa,
+                    cliente_id,
+                    prefijo,
+                    numero,
+                    fecha,
+                    vencimiento,
+                    _texto(datos.get("descripcion", anterior["descripcion"]), "Detalle del servicio"),
+                    _texto(datos.get("placas", anterior["placas"]), "Placas"),
+                    valores["subtotal_cop"],
+                    valores["iva_cop"],
+                    valores["retefuente_cop"],
+                    valores["ica_cop"],
+                    _ahora(),
+                    int(factura_id),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ErrorCartera(
+                f"La factura {prefijo}{numero} ya existe para {empresa}."
+            ) from exc
         _registrar(
             conexion,
             "factura_manual",

@@ -1,3 +1,4 @@
 streamlit>=1.58,<2
 pandas>=2.2,<4
+altair>=5,<7
 certifi>=2024.2.2
