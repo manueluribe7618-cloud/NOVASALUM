@@ -23,6 +23,29 @@ releer los 2.802 archivos que ya están aquí.
 
 ---
 
+## Alcance vigente — 9 de septiembre de 2026
+
+Esta aclaración sustituye cualquier interpretación anterior que trate la
+cartera manual de NOVASALUM como código descartado.
+
+NOVASALUM tendrá dos carteras separadas:
+
+- **Cartera manual:** la persona de Finanzas digita sus facturas, abonos y
+  ajustes. Es el módulo prioritario en esta etapa.
+- **Cartera Siigo:** consulta facturas, clientes y recibos directamente desde
+  la API de Siigo. Se mantiene independiente de la cartera manual.
+
+Más adelante se podrá comparar una cartera contra la otra, sin mezclar sus
+fuentes de datos ni permitir que esa comparación modifique documentos de
+Siigo. La frase histórica “No la revivas aquí” se refiere exclusivamente a la
+cartera heredada de Excel del proyecto original, no a la cartera manual nueva
+de NOVASALUM.
+
+Todo cambio del proyecto debe registrarse en `BITACORA.md`. Esta bitácora
+técnica es distinta del historial operativo de facturas y abonos.
+
+---
+
 ## Qué es esto y por qué existe
 
 La empresa (NOVASA Logistic SAS, LUAC Cargo SAS y MSU Máquinas y Serv —
@@ -100,12 +123,15 @@ pantalla nueva.
 
 ## Qué falta
 
-### 1. La interfaz. Es el trabajo real de este proyecto.
+### 1. Consolidar la cartera manual. Es la prioridad actual.
 
-No existe todavía. Se escribe desde cero, usando `referencia/pantalla_anterior.py`
-como guía.
+La interfaz ya existe: `app.py` es el punto de entrada mínimo y toda la
+pantalla vive en `src/ui.py` (cartera, registro/edición con 3 modos de
+impuestos, clientes y recaudo, abonos FIFO, Siigo y conciliación). Antes de
+ampliar sus funcionalidades hay que revisar cada flujo con Finanzas y definir
+una persistencia apta para despliegue.
 
-### 2. Las credenciales de Siigo.
+### 2. Las credenciales de Siigo, para la segunda cartera.
 
 Copia `.streamlit/secrets.toml.ejemplo` a `.streamlit/secrets.toml` y pon las
 reales: usuario y access key de cada una de las tres empresas.
@@ -113,7 +139,7 @@ reales: usuario y access key de cada una de las tres empresas.
 **Sin esto se puede construir todo, pero no probar contra datos reales.**
 `secrets.toml` ya está en `.gitignore`: nunca debe subirse a GitHub.
 
-### 3. Dónde guardar las anotaciones de revisión.
+### 3. Dónde guardar las anotaciones de revisión y los datos persistentes.
 
 La pantalla anterior guardaba anotaciones por factura en una tabla
 `siigo_revisiones` (empresa + id de factura + notas). En el proyecto original
@@ -202,15 +228,15 @@ USD/mes) es agregar un archivo de configuración. No hay que reescribir nada.
 
 ---
 
-## Primeros pasos sugeridos
+## Próximos pasos sugeridos
 
-1. `git init` y primer commit con lo que ya está aquí.
-2. Poner las credenciales y **probar que el API responde**: traer las facturas
-   de un mes de una empresa con `ClienteSiigo.listar_facturas(...)` y pasarlas
-   por `facturas_a_dataframe(...)`. Hasta no ver datos reales, no construyas
-   pantalla.
-3. Recién ahí, la interfaz: empieza por la vista de cartera por cliente con su
-   antigüedad, que es la que el dueño usa y manda como imagen.
+1. Revisar la cartera manual con Finanzas usando los datos de demostración y
+   acordar los primeros ajustes funcionales.
+2. Definir una persistencia segura para la cartera manual antes de desplegarla
+   en Streamlit Cloud; SQLite local no basta para producción.
+3. Más adelante, configurar y probar Siigo con una consulta real de un mes por
+   empresa, manteniéndola independiente de la cartera manual.
+4. Definir entonces las reglas autorizadas para comparar ambas carteras.
 
 ---
 
