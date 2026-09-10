@@ -1,23 +1,5 @@
 # NOVASALUM — arranque del proyecto
 
-> **Actualización de alcance — 9 de septiembre de 2026.** Este documento
-> conserva el contexto de la separación original. La decisión de no revivir la
-> cartera manual quedó reemplazada por la especificación funcional actual:
-> NOVASALUM incluye cartera manual, abonos FIFO, espejo de Siigo y
-> conciliación. El detalle vigente de uso y arranque está en
-> [README.md](README.md).
-
-## Estado actual de la primera versión
-
-- app.py contiene la interfaz Streamlit: cartera manual, abonos FIFO, espejo
-  de Siigo y conciliación lado a lado.
-- src/database.py contiene la cartera manual local: facturas, abonos,
-  aplicaciones, revisiones y auditoría. No escribe en Siigo.
-- tests/test_database.py cubre la aplicación FIFO y las protecciones de
-  saldos.
-- README.md es la guía vigente para ejecutar la aplicación y configurar
-  credenciales.
-
 Documento de traspaso. Léelo completo antes de escribir código: te ahorra
 releer los 2.802 archivos que ya están aquí.
 
@@ -61,16 +43,17 @@ administrar separada del resto.
 
 En la aplicación original había DOS carteras:
 
-- Una **cartera manual** que se alimentaba de un Excel. Aquella versión fue
-  descartada; no se copia su código ni sus datos. La cartera manual actual se
-  construye de nuevo con persistencia, abonos FIFO y auditoría.
-- La **cartera de Siigo**, que lee del API de Siigo (el software contable), se
-  conserva como espejo contable de solo lectura.
+- Una **cartera manual** que se alimentaba de un Excel. Ya se **borró** del
+  proyecto original (16.553 líneas). Era de prueba, estaba mal armada, y sus
+  datos se descartaron por decisión del dueño. **No copies sus datos ni su
+  diseño aquí.**
+- La **cartera de Siigo**, que lee del API de Siigo (el software contable).
+  Sigue siendo la fuente oficial de esa cartera.
 
-Un punto que vale la pena tener claro, y que el dueño puede usar con sus jefes:
-las facturas, clientes y recibos **de Siigo se leen en vivo del API de Siigo**.
-La cartera manual es una fuente operativa independiente; ninguna acción de
-NOVASALUM modifica documentos contables en Siigo.
+La cartera manual nueva de NOVASALUM no reutiliza la anterior: es un módulo
+independiente que Finanzas digita y administra. Por otro lado, las facturas,
+clientes y recibos de la **cartera Siigo** se leen en vivo del API: esa vista
+es una ventana y no modifica ni reemplaza la información de Siigo.
 
 ---
 
@@ -125,11 +108,9 @@ pantalla nueva.
 
 ### 1. Consolidar la cartera manual. Es la prioridad actual.
 
-La interfaz ya existe: `app.py` es el punto de entrada mínimo y toda la
-pantalla vive en `src/ui.py` (cartera, registro/edición con 3 modos de
-impuestos, clientes y recaudo, abonos FIFO, Siigo y conciliación). Antes de
-ampliar sus funcionalidades hay que revisar cada flujo con Finanzas y definir
-una persistencia apta para despliegue.
+La interfaz ya existe y se organiza en módulos de estilos, componentes,
+navegación y vistas. Antes de ampliar sus funcionalidades hay que revisar cada
+flujo con Finanzas y definir una persistencia apta para despliegue.
 
 ### 2. Las credenciales de Siigo, para la segunda cartera.
 

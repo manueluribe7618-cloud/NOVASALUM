@@ -1,1 +1,1 @@
-"""Módulos del sistema NOVASALUM."""
+"""Paquete principal de NOVASALUM."""

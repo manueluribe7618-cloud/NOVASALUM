@@ -29,7 +29,6 @@ class CarteraManualTests(unittest.TestCase):
                 "fecha": fecha,
                 "vencimiento": fecha + timedelta(days=30),
                 "cliente": "Cliente de prueba SAS",
-                "nit": "900000001-1",
                 "descripcion": "Servicio de prueba",
                 "placas": "ABC123",
                 "subtotal_cop": subtotal,
@@ -109,32 +108,10 @@ class CarteraManualTests(unittest.TestCase):
             )
         self.assertEqual(db.obtener_factura(factura, self.ruta)["saldo_cop"], 30_000)
 
-    def test_editar_puede_actualizar_cliente_y_empresa_sin_abonos(self) -> None:
-        factura = self.crear_factura("400", self.hoy, 100_000)
+    def test_factura_manual_no_registra_nit(self) -> None:
+        factura = self.crear_factura("400", self.hoy)
 
-        db.actualizar_campos_factura(
-            factura,
-            {
-                "empresa_codigo": "LUAC",
-                "prefijo": "LUA",
-                "numero": "400",
-                "cliente": "Cliente actualizado SAS",
-                "fecha": self.hoy,
-                "vencimiento": self.hoy + timedelta(days=30),
-                "descripcion": "Servicio actualizado",
-                "placas": "XYZ789",
-                "subtotal_cop": 100_000,
-                "iva_cop": 0,
-                "retefuente_cop": 0,
-                "ica_cop": 0,
-            },
-            self.ruta,
-        )
-
-        editada = db.obtener_factura(factura, self.ruta)
-        self.assertEqual(editada["empresa_codigo"], "LUAC")
-        self.assertEqual(editada["prefijo"], "LUA")
-        self.assertEqual(editada["cliente"], "Cliente actualizado SAS")
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["nit"], "")
 
 
 if __name__ == "__main__":

@@ -1,18 +1,12 @@
-"""Punto de entrada de la aplicación NOVASALUM."""
+"""Punto de entrada de Streamlit para NOVASALUM.
 
-from __future__ import annotations
+La composición de la aplicación vive en ``src.app_shell``. Mantener este
+archivo mínimo permite escalar las vistas, los componentes y la lógica de
+negocio sin convertir el punto de entrada en un módulo monolítico.
+"""
 
-import streamlit as st
-
-
-st.set_page_config(
-    page_title="NOVASALUM · Cartera",
-    page_icon="◈",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-from src.ui import main
+from src.app_shell import run_application
 
 
-main()
+if __name__ == "__main__":
+    run_application()

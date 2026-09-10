@@ -274,31 +274,17 @@ def _cliente_id(
     conexion: sqlite3.Connection,
     empresa_codigo: str,
     nombre: Any,
-    nit: Any,
 ) -> int:
     nombre_limpio = _texto(nombre, "Cliente", obligatorio=True)
-    nit_limpio = _texto(nit, "NIT")
-    if nit_limpio:
-        encontrado = conexion.execute(
-            """
-            SELECT id FROM clientes
-            WHERE empresa_codigo = ? AND nombre = ? AND nit = ?
-            """,
-            (empresa_codigo, nombre_limpio, nit_limpio),
-        ).fetchone()
-    else:
-        # La pantalla trabaja por nombre de cliente. Si una cartera antigua
-        # conserva NIT, reutiliza ese cliente en vez de crear un duplicado
-        # invisible para el usuario.
-        encontrado = conexion.execute(
-            """
-            SELECT id FROM clientes
-            WHERE empresa_codigo = ? AND nombre = ? COLLATE NOCASE
-            ORDER BY id
-            LIMIT 1
-            """,
-            (empresa_codigo, nombre_limpio),
-        ).fetchone()
+    encontrado = conexion.execute(
+        """
+        SELECT id FROM clientes
+        WHERE empresa_codigo = ? AND nombre = ?
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (empresa_codigo, nombre_limpio),
+    ).fetchone()
     if encontrado:
         return int(encontrado["id"])
 
@@ -308,7 +294,7 @@ def _cliente_id(
         INSERT INTO clientes (empresa_codigo, nombre, nit, creado_en, actualizado_en)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (empresa_codigo, nombre_limpio, nit_limpio, marca, marca),
+        (empresa_codigo, nombre_limpio, "", marca, marca),
     )
     return int(cursor.lastrowid)
 
@@ -334,7 +320,7 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
         raise ErrorCartera("El total de la factura debe ser mayor que cero.")
 
     with _transaccion(ruta) as conexion:
-        cliente_id = _cliente_id(conexion, empresa, datos.get("cliente"), datos.get("nit"))
+        cliente_id = _cliente_id(conexion, empresa, datos.get("cliente"))
         try:
             cursor = conexion.execute(
                 """
@@ -366,12 +352,20 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
                 f"La factura {prefijo}{numero} ya existe para {empresa}."
             ) from exc
         factura_id = int(cursor.lastrowid)
+        audit_detail: dict[str, Any] = {
+            "empresa": empresa,
+            "factura": f"{prefijo}{numero}",
+            **valores,
+        }
+        tax_configuration = datos.get("impuestos_config")
+        if isinstance(tax_configuration, Mapping):
+            audit_detail["impuestos_config"] = dict(tax_configuration)
         _registrar(
             conexion,
             "factura_manual",
             factura_id,
             "CREADA",
-            {"empresa": empresa, "factura": f"{prefijo}{numero}", **valores},
+            audit_detail,
         )
         return factura_id
 
@@ -382,9 +376,8 @@ def _factura_para_editar(
 ) -> sqlite3.Row:
     fila = conexion.execute(
         """
-        SELECT f.*, c.nombre AS cliente, COALESCE(SUM(a.monto_cop), 0) AS abonos_cop
+        SELECT f.*, COALESCE(SUM(a.monto_cop), 0) AS abonos_cop
         FROM facturas_manual f
-        INNER JOIN clientes c ON c.id = f.cliente_id
         LEFT JOIN aplicaciones_abono a ON a.factura_id = f.id
         WHERE f.id = ?
         GROUP BY f.id
@@ -408,26 +401,11 @@ def actualizar_campos_factura(
     inicializar(ruta)
     with _transaccion(ruta) as conexion:
         anterior = _factura_para_editar(conexion, int(factura_id))
-        empresa = _empresa(datos.get("empresa_codigo", anterior["empresa_codigo"]))
-        cliente_id = _cliente_id(
-            conexion,
-            empresa,
-            datos.get("cliente", anterior["cliente"]),
-            datos.get("nit", ""),
-        )
-        cambia_asignacion = (
-            empresa != str(anterior["empresa_codigo"])
-            or cliente_id != int(anterior["cliente_id"])
-        )
-        if cambia_asignacion and int(anterior["abonos_cop"]) > 0:
-            raise ErrorCartera(
-                "No se puede cambiar empresa o cliente de una factura con abonos aplicados."
-            )
         valores = {
             "subtotal_cop": _pesos(datos.get("subtotal_cop"), "Subtotal"),
-            "iva_cop": _pesos(datos.get("iva_cop", 0), "IVA"),
-            "retefuente_cop": _pesos(datos.get("retefuente_cop", 0), "Retefuente"),
-            "ica_cop": _pesos(datos.get("ica_cop", 0), "ICA"),
+            "iva_cop": _pesos(datos.get("iva_cop"), "IVA"),
+            "retefuente_cop": _pesos(datos.get("retefuente_cop"), "Retefuente"),
+            "ica_cop": _pesos(datos.get("ica_cop"), "ICA"),
         }
         total = _total_factura(valores)
         if total <= 0:
@@ -436,45 +414,24 @@ def actualizar_campos_factura(
             raise ErrorCartera(
                 "El total nuevo no puede ser menor que los abonos ya aplicados."
             )
-
-        fecha = _fecha(datos.get("fecha", anterior["fecha"]), "Fecha de emisión")
-        vencimiento = _fecha(datos.get("vencimiento", anterior["vencimiento"]), "Fecha de vencimiento", obligatoria=False)
-        if vencimiento and vencimiento < fecha:
-            raise ErrorCartera("El vencimiento no puede ser anterior a la fecha de emisión.")
-
-        prefijo = _texto(datos.get("prefijo", anterior["prefijo"]), "Prefijo").upper()
-        numero = _texto(datos.get("numero", anterior["numero"]), "Número de factura").upper()
-
-        try:
-            conexion.execute(
-                """
+        conexion.execute(
+            """
             UPDATE facturas_manual
-            SET empresa_codigo = ?, cliente_id = ?, prefijo = ?, numero = ?, fecha = ?, vencimiento = ?,
-                descripcion = ?, placas = ?, subtotal_cop = ?, iva_cop = ?,
+            SET descripcion = ?, placas = ?, subtotal_cop = ?, iva_cop = ?,
                 retefuente_cop = ?, ica_cop = ?, actualizada_en = ?
             WHERE id = ?
-                """,
-                (
-                    empresa,
-                    cliente_id,
-                    prefijo,
-                    numero,
-                    fecha,
-                    vencimiento,
-                    _texto(datos.get("descripcion", anterior["descripcion"]), "Detalle del servicio"),
-                    _texto(datos.get("placas", anterior["placas"]), "Placas"),
-                    valores["subtotal_cop"],
-                    valores["iva_cop"],
-                    valores["retefuente_cop"],
-                    valores["ica_cop"],
-                    _ahora(),
-                    int(factura_id),
-                ),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise ErrorCartera(
-                f"La factura {prefijo}{numero} ya existe para {empresa}."
-            ) from exc
+            """,
+            (
+                _texto(datos.get("descripcion"), "Detalle del servicio"),
+                _texto(datos.get("placas"), "Placas"),
+                valores["subtotal_cop"],
+                valores["iva_cop"],
+                valores["retefuente_cop"],
+                valores["ica_cop"],
+                _ahora(),
+                int(factura_id),
+            ),
+        )
         _registrar(
             conexion,
             "factura_manual",
@@ -638,82 +595,6 @@ def clientes_con_saldo(
         agrupados.values(),
         key=lambda fila: (-int(fila["saldo_cop"]), str(fila["cliente"]).casefold()),
     )
-
-
-def listar_nombres_clientes(empresa_codigo: str | None = None, ruta: str | Path | None = None) -> list[str]:
-    """Retorna lista ordenada de nombres únicos de clientes."""
-    inicializar(ruta)
-    with _lectura(ruta) as conexion:
-        filtros = []
-        params = []
-        if empresa_codigo:
-            filtros.append("empresa_codigo = ?")
-            params.append(_empresa(empresa_codigo))
-        where = f"WHERE {' AND '.join(filtros)}" if filtros else ""
-        filas = conexion.execute(f"SELECT DISTINCT nombre FROM clientes {where} ORDER BY nombre COLLATE NOCASE ASC", params).fetchall()
-        return [fila["nombre"] for fila in filas if fila["nombre"]]
-
-
-def resumen_saldos_por_empresa(ruta: str | Path | None = None) -> dict[str, dict[str, int]]:
-    """Devuelve desglose de saldo y número de facturas activas por cada empresa."""
-    inicializar(ruta)
-    todas = listar_facturas(None, ruta=ruta)
-    resumen: dict[str, dict[str, int]] = {
-        empresa: {"saldo_cop": 0, "facturas_pendientes": 0, "total_facturado_cop": 0, "total_abonos_cop": 0}
-        for empresa in EMPRESAS
-    }
-    for f in todas:
-        emp = f["empresa_codigo"]
-        if emp in resumen:
-            resumen[emp]["total_facturado_cop"] += int(f["total_cop"])
-            resumen[emp]["total_abonos_cop"] += int(f["abonos_cop"])
-            if int(f["saldo_cop"]) > 0:
-                resumen[emp]["saldo_cop"] += int(f["saldo_cop"])
-                resumen[emp]["facturas_pendientes"] += 1
-    return resumen
-
-
-def resumen_clientes_agrupado(
-    empresa_codigo: str | None = None,
-    orden: str = "menor_a_mayor",
-    ruta: str | Path | None = None,
-) -> list[dict[str, Any]]:
-    """Devuelve resumen consolidado por cliente con total facturado, abonos y saldo, ordenado."""
-    facturas = listar_facturas(empresa_codigo, ruta=ruta)
-    clientes: dict[str, dict[str, Any]] = {}
-    for f in facturas:
-        nombre = f["cliente"]
-        if nombre not in clientes:
-            clientes[nombre] = {
-                "cliente": nombre,
-                "nit": f.get("nit", ""),
-                "facturas_total": 0,
-                "facturas_pendientes": 0,
-                "total_facturado_cop": 0,
-                "total_abonos_cop": 0,
-                "saldo_cop": 0,
-                "empresas": set(),
-            }
-        c = clientes[nombre]
-        c["facturas_total"] += 1
-        c["total_facturado_cop"] += int(f["total_cop"])
-        c["total_abonos_cop"] += int(f["abonos_cop"])
-        c["empresas"].add(f["empresa_codigo"])
-        if int(f["saldo_cop"]) > 0:
-            c["saldo_cop"] += int(f["saldo_cop"])
-            c["facturas_pendientes"] += 1
-
-    lista = []
-    for c in clientes.values():
-        c_copia = dict(c)
-        c_copia["empresas_str"] = ", ".join(sorted(c["empresas"]))
-        lista.append(c_copia)
-
-    if orden == "menor_a_mayor":
-        lista.sort(key=lambda x: (int(x["saldo_cop"]), str(x["cliente"]).casefold()))
-    else:
-        lista.sort(key=lambda x: (-int(x["saldo_cop"]), str(x["cliente"]).casefold()))
-    return lista
 
 
 def facturas_pendientes_cliente(
@@ -1053,12 +934,9 @@ __all__ = [
     "inicializar",
     "listar_abonos",
     "listar_facturas",
-    "listar_nombres_clientes",
     "obtener_factura",
     "previsualizar_fifo",
     "registrar_abono",
     "resumen_actividad",
     "resumen_cartera",
-    "resumen_clientes_agrupado",
-    "resumen_saldos_por_empresa",
 ]
