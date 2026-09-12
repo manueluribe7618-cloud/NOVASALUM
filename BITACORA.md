@@ -378,3 +378,38 @@ autorización de Finanzas o del dueño.
 - Pendiente para la primera lectura real: con credenciales configuradas, el
   panel de supervisión mostrará cuántas facturas tiene un mes por empresa y
   cuánto tarda; con esa cifra se decide si hace falta un tope por consulta.
+
+## 2026-09-11 — Almacenamiento listo para Supabase (sin migrar datos de prueba)
+
+- Solicitud: dejar el programa listo para guardar la información en Supabase,
+  siempre completa y en orden. Los datos actuales son de prueba y no se
+  migran: en la nube se arranca limpio.
+- Cambio: `src/database.py` ahora tiene dos motores con la misma API. Sin
+  configuración funciona igual que siempre (SQLite local). Cuando existe la
+  llave `SUPABASE_DB_URL` en los secretos, todas las tablas (facturas,
+  clientes, abonos, aplicaciones FIFO, revisiones y auditoría) viven en
+  Postgres de Supabase, con las mismas reglas: transacciones en cada
+  escritura, UNIQUE de consecutivo por empresa, guardas de abonos y rastro
+  de auditoría. Regla fija: una ruta explícita siempre es SQLite, así ninguna
+  prueba ni base temporal puede irse a la nube por accidente.
+- Seguridad de la conexión: TLS verificado con la CA de Supabase que ya está
+  en `certs/` (la lección del proyecto anterior). Un `sslmode` que venga en
+  la URL se respeta.
+- Rendimiento: la conexión con la nube se comparte y se reutiliza (abrir un
+  canal TLS por consulta sería inaceptablemente lento), el esquema se
+  verifica una sola vez por proceso, y `prepare_threshold=None` para
+  compatibilidad con el pooler de Supabase.
+- Interfaz: la barra lateral dice siempre dónde están los datos («Datos:
+  SQLite local · novasalum.db» o «Datos: Supabase (nube)»), y si la nube no
+  responde al arrancar, la app muestra el motivo y se detiene con un aviso
+  claro en vez de un error técnico.
+- Impacto contable: ninguno. Mismas fórmulas, mismas validaciones, mismo
+  redondeo; solo cambia dónde se guarda.
+- Validación: 77 pruebas en verde (11 nuevas del almacenamiento dual:
+  selección de motor, traducción del dialecto, RETURNING, TLS, y el flujo
+  completo factura+abono en local). pyflakes limpio. Arranque verificado con
+  el letrero de almacenamiento visible.
+- Pendiente (dueño): crear el proyecto en supabase.com y pegar la URL del
+  Transaction pooler en `.streamlit/secrets.toml` como `SUPABASE_DB_URL`.
+  Con la llave puesta se hace la primera prueba en vivo (crear una factura de
+  prueba, abonarla, releerla y borrarla) antes de digitar las reales.

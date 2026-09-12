@@ -9,6 +9,8 @@ Cada cartera elige su propia empresa (``filtro_empresa_manual``,
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
 from src import database as db
@@ -32,7 +34,31 @@ def run_application() -> None:
         initial_sidebar_state="expanded",
     )
     apply_global_styles()
-    db.inicializar()
+
+    # Puente de secretos: si hay una URL de Supabase configurada, la cartera
+    # manual se guarda allá. src.database no importa Streamlit, así que la
+    # llave viaja por el entorno del proceso.
+    try:
+        url_nube = str(st.secrets.get("SUPABASE_DB_URL", "")).strip()
+    except Exception:
+        url_nube = ""
+    if url_nube:
+        os.environ["SUPABASE_DB_URL"] = url_nube
+
+    try:
+        db.inicializar()
+    except Exception as exc:
+        st.error(
+            "No fue posible conectar con la base de datos "
+            f"({db.descripcion_almacen()}). Detalle: {exc}"
+        )
+        st.info(
+            "Revisa la llave SUPABASE_DB_URL en los secretos, o retírala para "
+            "trabajar con la base local mientras tanto. Ninguna factura se "
+            "pierde por este aviso: simplemente no se puede leer ni guardar "
+            "hasta restablecer la conexión."
+        )
+        st.stop()
 
     current_view = st.session_state.get("vista", VISTA_MANUAL)
     view = render_sidebar(current_view)

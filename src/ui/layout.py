@@ -40,6 +40,8 @@ def render_sidebar(current_view: str) -> str:
             unsafe_allow_html=True,
         )
         st.caption("Cartera separada · operación y lectura contable")
+        # El dueño debe saber de un vistazo dónde están guardadas sus facturas.
+        st.caption(f"Datos: {db.descripcion_almacen()}")
         st.divider()
         selected_view = st.radio(
             "Navegación",

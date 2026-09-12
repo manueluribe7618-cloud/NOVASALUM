@@ -2,3 +2,4 @@ streamlit>=1.58,<2
 pandas
 certifi
 streamlit-aggrid==1.0.5
+psycopg[binary]>=3.1,<4

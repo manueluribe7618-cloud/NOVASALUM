@@ -16,7 +16,15 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any, Iterator, Mapping, Sequence
+
+try:  # psycopg solo hace falta cuando los datos viven en Supabase
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover - entorno local sin psycopg instalado
+    psycopg = None  # type: ignore[assignment]
+    dict_row = None  # type: ignore[assignment]
 
 
 EMPRESAS: dict[str, dict[str, str]] = {
@@ -62,8 +70,142 @@ def _conexion(ruta: str | Path | None = None) -> sqlite3.Connection:
     return conexion
 
 
+# ---------------------------------------------------------------------------
+# Dos motores con la misma API. SQLite es el modo local: este equipo y todas
+# las pruebas. Postgres/Supabase se activa solo cuando existe SUPABASE_DB_URL,
+# porque en Streamlit Cloud el disco es efímero y las facturas deben vivir en
+# una base externa. Regla fija: si una función recibe ``ruta`` explícita, es
+# SQLite en esa ruta — así las bases temporales de las pruebas nunca cambian.
+# ---------------------------------------------------------------------------
+
+ERRORES_INTEGRIDAD: tuple[type[Exception], ...] = (
+    (sqlite3.IntegrityError,)
+    if psycopg is None
+    else (sqlite3.IntegrityError, psycopg.IntegrityError)
+)
+
+_CANDADO_PG = threading.Lock()
+_CONEXION_PG: Any = None
+_ESQUEMA_PG_LISTO = False
+
+
+def url_supabase() -> str:
+    """URL de Postgres configurada; vacía cuando se trabaja en SQLite local."""
+
+    return os.getenv("SUPABASE_DB_URL", "").strip()
+
+
+def _usa_postgres(ruta: str | Path | None) -> bool:
+    return ruta is None and bool(url_supabase())
+
+
+def descripcion_almacen() -> str:
+    """Dónde se están guardando los datos, para decirlo en la interfaz."""
+
+    if url_supabase():
+        return "Supabase (nube)"
+    return f"SQLite local · {_ruta_base().name}"
+
+
+def _url_con_tls(url: str) -> str:
+    """Garantiza TLS verificado con la CA de Supabase si la URL no lo trae.
+
+    El certificado raíz de Supabase ya está en ``certs/`` porque su ausencia
+    tumbó el proyecto anterior en producción. Se respeta cualquier ``sslmode``
+    que la URL ya traiga configurado.
+    """
+
+    if "sslmode=" in url:
+        return url
+    separador = "&" if "?" in url else "?"
+    certificado = Path(__file__).resolve().parent.parent / "certs" / "supabase-root-2021-ca.pem"
+    if certificado.exists():
+        return f"{url}{separador}sslmode=verify-full&sslrootcert={certificado}"
+    return f"{url}{separador}sslmode=require"
+
+
+class _ConexionPG:
+    """Adapta psycopg a la interfaz que este módulo ya usa con sqlite3.
+
+    Traduce los marcadores ``?`` a ``%s`` y convierte ``close()`` en no hacer
+    nada: la conexión con la nube se comparte y se reutiliza, porque abrir un
+    canal TLS nuevo en cada consulta haría la aplicación inaceptablemente
+    lenta. El candado ``_CANDADO_PG`` serializa su uso entre hilos.
+    """
+
+    def __init__(self, conexion: Any) -> None:
+        self._conexion = conexion
+
+    def execute(self, sql: str, parametros: Sequence[Any] = ()) -> Any:
+        return self._conexion.execute(sql.replace("?", "%s"), tuple(parametros))
+
+    def executescript(self, script: str) -> None:
+        # El DDL del esquema no contiene punto y coma dentro de literales.
+        for sentencia in script.split(";"):
+            if sentencia.strip():
+                self._conexion.execute(sentencia)
+
+    def commit(self) -> None:
+        self._conexion.execute("COMMIT")
+
+    def rollback(self) -> None:
+        self._conexion.execute("ROLLBACK")
+
+    def close(self) -> None:  # la conexión compartida no se cierra por consulta
+        return None
+
+
+def _conexion_pg() -> _ConexionPG:
+    """Entrega la conexión compartida con Supabase, reconectando si murió."""
+
+    global _CONEXION_PG
+    if psycopg is None:
+        raise ErrorCartera(
+            "SUPABASE_DB_URL está configurada pero falta el paquete psycopg. "
+            "Instala las dependencias con: pip install -r requirements.txt"
+        )
+    if _CONEXION_PG is not None:
+        try:
+            _CONEXION_PG.execute("SELECT 1")
+            return _ConexionPG(_CONEXION_PG)
+        except Exception:
+            try:
+                _CONEXION_PG.close()
+            except Exception:
+                pass
+            _CONEXION_PG = None
+    _CONEXION_PG = psycopg.connect(
+        _url_con_tls(url_supabase()),
+        autocommit=True,
+        row_factory=dict_row,
+        prepare_threshold=None,  # necesario con el pooler de Supabase
+        connect_timeout=15,
+    )
+    return _ConexionPG(_CONEXION_PG)
+
+
+def _insertar(conexion: Any, sql: str, parametros: Sequence[Any]) -> int:
+    """Inserta una fila y devuelve su id generado, en cualquiera de los motores."""
+
+    if isinstance(conexion, _ConexionPG):
+        fila = conexion.execute(sql + " RETURNING id", parametros).fetchone()
+        return int(fila["id"])
+    return int(conexion.execute(sql, parametros).lastrowid)
+
+
 @contextmanager
-def _transaccion(ruta: str | Path | None = None) -> Iterator[sqlite3.Connection]:
+def _transaccion(ruta: str | Path | None = None) -> Iterator[Any]:
+    if _usa_postgres(ruta):
+        with _CANDADO_PG:
+            conexion = _conexion_pg()
+            try:
+                conexion.execute("BEGIN")
+                yield conexion
+                conexion.commit()
+            except Exception:
+                conexion.rollback()
+                raise
+        return
     conexion = _conexion(ruta)
     try:
         conexion.execute("BEGIN IMMEDIATE")
@@ -77,9 +219,13 @@ def _transaccion(ruta: str | Path | None = None) -> Iterator[sqlite3.Connection]
 
 
 @contextmanager
-def _lectura(ruta: str | Path | None = None) -> Iterator[sqlite3.Connection]:
+def _lectura(ruta: str | Path | None = None) -> Iterator[Any]:
     """Entrega una conexión de solo lectura y siempre libera el archivo en Windows."""
 
+    if _usa_postgres(ruta):
+        with _CANDADO_PG:
+            yield _conexion_pg()
+        return
     conexion = _conexion(ruta)
     try:
         yield conexion
@@ -87,12 +233,43 @@ def _lectura(ruta: str | Path | None = None) -> Iterator[sqlite3.Connection]:
         conexion.close()
 
 
+def _esquema_sql(*, postgres: bool) -> str:
+    """El mismo esquema para los dos motores; solo cambia el id autonumérico."""
+
+    esquema = _ESQUEMA_BASE
+    if postgres:
+        esquema = esquema.replace(
+            "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
+        )
+    return esquema
+
+
 def inicializar(ruta: str | Path | None = None) -> None:
     """Crea el esquema y las tres empresas si todavía no existen."""
 
+    global _ESQUEMA_PG_LISTO
+    en_postgres = _usa_postgres(ruta)
+    if en_postgres and _ESQUEMA_PG_LISTO:
+        # Contra la nube, verificar el esquema en cada llamada costaría un
+        # viaje de red por función; con una vez por proceso alcanza.
+        return
     with _transaccion(ruta) as conexion:
-        conexion.executescript(
-            """
+        conexion.executescript(_esquema_sql(postgres=en_postgres))
+        for codigo, datos in EMPRESAS.items():
+            conexion.execute(
+                """
+                INSERT INTO empresas (codigo, nombre, prefijo, color)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (codigo) DO NOTHING
+                """,
+                (codigo, datos["nombre"], datos["prefijo"], datos["color"]),
+            )
+    if en_postgres:
+        _ESQUEMA_PG_LISTO = True
+
+
+_ESQUEMA_BASE = """
             CREATE TABLE IF NOT EXISTS empresas (
                 codigo TEXT PRIMARY KEY,
                 nombre TEXT NOT NULL,
@@ -178,16 +355,7 @@ def inicializar(ruta: str | Path | None = None) -> None:
                 ON abonos_manual(cliente_id, fecha);
             CREATE INDEX IF NOT EXISTS idx_aplicaciones_factura
                 ON aplicaciones_abono(factura_id);
-            """
-        )
-        for codigo, datos in EMPRESAS.items():
-            conexion.execute(
-                """
-                INSERT OR IGNORE INTO empresas (codigo, nombre, prefijo, color)
-                VALUES (?, ?, ?, ?)
-                """,
-                (codigo, datos["nombre"], datos["prefijo"], datos["color"]),
-            )
+"""
 
 
 def _ahora() -> str:
@@ -289,14 +457,14 @@ def _cliente_id(
         return int(encontrado["id"])
 
     marca = _ahora()
-    cursor = conexion.execute(
+    return _insertar(
+        conexion,
         """
         INSERT INTO clientes (empresa_codigo, nombre, nit, creado_en, actualizado_en)
         VALUES (?, ?, ?, ?, ?)
         """,
         (empresa_codigo, nombre_limpio, "", marca, marca),
     )
-    return int(cursor.lastrowid)
 
 
 def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> int:
@@ -322,7 +490,8 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
     with _transaccion(ruta) as conexion:
         cliente_id = _cliente_id(conexion, empresa, datos.get("cliente"))
         try:
-            cursor = conexion.execute(
+            factura_id = _insertar(
+                conexion,
                 """
                 INSERT INTO facturas_manual (
                     empresa_codigo, cliente_id, prefijo, numero, fecha, vencimiento,
@@ -347,11 +516,10 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
                     _ahora(),
                 ),
             )
-        except sqlite3.IntegrityError as exc:
+        except ERRORES_INTEGRIDAD as exc:
             raise ErrorCartera(
                 f"La factura {prefijo}{numero} ya existe para {empresa}."
             ) from exc
-        factura_id = int(cursor.lastrowid)
         audit_detail: dict[str, Any] = {
             "empresa": empresa,
             "factura": f"{prefijo}{numero}",
@@ -455,7 +623,7 @@ def actualizar_campos_factura(
                     int(factura_id),
                 ),
             )
-        except sqlite3.IntegrityError as exc:
+        except ERRORES_INTEGRIDAD as exc:
             raise ErrorCartera(
                 f"La factura {anterior['prefijo']}{numero} ya existe para "
                 f"{anterior['empresa_codigo']}."
@@ -527,6 +695,9 @@ def _filas_facturas(
     filas: list[dict[str, Any]] = []
     for fila_cruda in conexion.execute(consulta, parametros).fetchall():
         fila = dict(fila_cruda)
+        # En Postgres las sumas agregadas llegan como Decimal; se normaliza a
+        # pesos enteros para que las vistas y pandas reciban siempre lo mismo.
+        fila["abonos_cop"] = int(fila["abonos_cop"])
         total = _total_factura(fila)
         saldo = total - int(fila["abonos_cop"])
         vencimiento = fila["vencimiento"]
@@ -720,7 +891,8 @@ def registrar_abono(
                     f"La aplicación supera el saldo de {factura['prefijo']}{factura['numero']}."
                 )
 
-        cursor = conexion.execute(
+        abono_id = _insertar(
+            conexion,
             """
             INSERT INTO abonos_manual (
                 empresa_codigo, cliente_id, fecha, referencia, monto_cop,
@@ -737,7 +909,6 @@ def registrar_abono(
                 _ahora(),
             ),
         )
-        abono_id = int(cursor.lastrowid)
         for factura_id, valor in aplicaciones_limpias.items():
             conexion.execute(
                 """
@@ -809,7 +980,8 @@ def guardar_revision_conciliacion(
     clave = _texto(factura_clave, "Factura", obligatorio=True)
     estado_limpio = _texto(estado, "Estado", obligatorio=True).upper()
     with _transaccion(ruta) as conexion:
-        cursor = conexion.execute(
+        revision_id = _insertar(
+            conexion,
             """
             INSERT INTO revisiones_conciliacion (
                 empresa_codigo, factura_clave, estado, observacion, manual_json,
@@ -826,7 +998,6 @@ def guardar_revision_conciliacion(
                 _ahora(),
             ),
         )
-        revision_id = int(cursor.lastrowid)
         _registrar(
             conexion,
             "conciliacion",
