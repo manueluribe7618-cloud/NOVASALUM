@@ -25,7 +25,7 @@ TAX_COMPONENTS = {
 }
 # Punto único para futuras tasas predeterminadas por empresa o concepto.
 TAX_DEFAULTS = {
-    component: {"mode": "NO_APLICA", "value": 0.0}
+    component: {"mode": "PORCENTAJE", "value": 0.0}
     for component in TAX_COMPONENTS
 }
 

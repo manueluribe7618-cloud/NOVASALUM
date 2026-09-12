@@ -268,10 +268,100 @@ def apply_global_styles() -> None:
                 background: #eff6ff !important;
                 border-color: var(--blue) !important;
             }
+            /* Movimiento breve: entrada de paneles y respuesta de controles. */
+            @keyframes novasalum-reveal {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            .kpi-card, .surface, .split-card {
+                animation: novasalum-reveal 240ms ease-out;
+                transition: border-color 180ms ease, box-shadow 180ms ease,
+                            transform 180ms ease;
+            }
+            [role="dialog"], [role="tabpanel"] {
+                animation: novasalum-reveal 200ms ease-out;
+            }
+            [data-baseweb="popover"] {
+                animation: novasalum-reveal 140ms ease-out;
+            }
+            [data-testid="stButton"] > button,
+            [data-testid="stSegmentedControl"] button,
+            [data-testid="stTabs"] button[role="tab"] {
+                transition: background-color 160ms ease, border-color 160ms ease,
+                            color 160ms ease, box-shadow 160ms ease,
+                            transform 120ms ease;
+            }
+            [data-testid="stButton"] > button:active:not(:disabled) {
+                transform: scale(.985);
+            }
+            [data-testid="stTextInput"] input,
+            [data-testid="stTextArea"] textarea,
+            [data-testid="stNumberInput"] input,
+            [data-testid="stDateInput"] input,
+            [data-baseweb="select"] > div {
+                transition: border-color 160ms ease, box-shadow 160ms ease;
+            }
+            [data-testid="stRadio"] label {
+                border-radius: 7px;
+                transition: background-color 160ms ease, color 160ms ease;
+            }
+            @media (hover: hover) and (pointer: fine) {
+                .kpi-card:hover {
+                    transform: translateY(-2px);
+                    border-color: #b9ccee;
+                    box-shadow: 0 10px 24px rgba(37, 99, 235, .08);
+                }
+                [data-testid="stButton"] > button:hover:not(:disabled) {
+                    box-shadow: 0 4px 12px rgba(37, 99, 235, .10);
+                }
+                [data-testid="stRadio"] label:hover {
+                    background-color: #eff6ff;
+                }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .stApp *, .stApp *::before, .stApp *::after,
+                [role="dialog"], [role="dialog"] *, [data-baseweb="popover"] {
+                    animation: none !important;
+                    transition: none !important;
+                }
+                .kpi-card:hover,
+                [data-testid="stButton"] > button:active:not(:disabled) {
+                    transform: none !important;
+                }
+            }
             @media (max-width: 760px) {
                 .block-container { padding: 1rem .8rem 2rem; }
                 .kpi-value { font-size: 1.25rem; }
                 .kpi-card { min-height: 104px; padding: .85rem; }
+            }
+            /* Estado de cuenta por cliente: réplica del cierre del Excel */
+            .statement-company-total {
+                text-align: right;
+                color: #b91c1c;
+                font-weight: 700;
+                font-size: .95rem;
+                margin-top: .4rem;
+            }
+            .statement-total-row {
+                display: flex;
+                justify-content: flex-end;
+                align-items: center;
+                gap: 1rem;
+                margin-top: .6rem;
+                flex-wrap: wrap;
+            }
+            .statement-total-context {
+                color: #64748b;
+                font-size: .85rem;
+            }
+            .statement-total-badge {
+                background: #fde047;
+                color: #713f12;
+                font-weight: 800;
+                padding: .45rem .95rem;
+                border-radius: 8px;
+                letter-spacing: .02em;
+                white-space: nowrap;
             }
         </style>
         """,

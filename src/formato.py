@@ -5,6 +5,21 @@ proyecto anterior, que traia dependencias de toda la aplicacion de liquidacion.
 """
 from __future__ import annotations
 
+import re
+
+
+def parse_cop(texto: str) -> int:
+    """Lee pesos enteros, con puntos de miles opcionales y sin centavos."""
+
+    valor = texto.strip()
+    if valor.startswith("$"):
+        valor = valor[1:].strip()
+    if not re.fullmatch(r"(?:[0-9]+|[0-9]{1,3}(?:\.[0-9]{3})+)", valor):
+        raise ValueError(
+            "Escribe pesos sin centavos, por ejemplo 1.500.000 o 1500000."
+        )
+    return int(valor.replace(".", ""))
+
 
 def fmt_cop(valor, dash_zero=True):
     """Pesos con punto de miles y SIN centavos: '$ 1.500.000'.

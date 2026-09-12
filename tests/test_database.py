@@ -108,10 +108,123 @@ class CarteraManualTests(unittest.TestCase):
             )
         self.assertEqual(db.obtener_factura(factura, self.ruta)["saldo_cop"], 30_000)
 
+    def test_editar_corrige_numero_y_fechas(self) -> None:
+        factura = self.crear_factura("700", self.hoy)
+        nueva_fecha = self.hoy - timedelta(days=5)
+        nuevo_vencimiento = self.hoy + timedelta(days=45)
+
+        db.actualizar_campos_factura(
+            factura,
+            {
+                "numero": "701",
+                "fecha": nueva_fecha,
+                "vencimiento": nuevo_vencimiento,
+                "descripcion": "Servicio de prueba",
+                "placas": "ABC123",
+                "subtotal_cop": 100_000,
+                "iva_cop": 0,
+                "retefuente_cop": 0,
+                "ica_cop": 0,
+            },
+            self.ruta,
+        )
+
+        editada = db.obtener_factura(factura, self.ruta)
+        self.assertEqual(editada["factura"], "FEBA701")
+        self.assertEqual(editada["fecha"], nueva_fecha.isoformat())
+        self.assertEqual(editada["vencimiento"], nuevo_vencimiento.isoformat())
+
+    def test_editar_sin_numero_ni_fechas_conserva_los_guardados(self) -> None:
+        factura = self.crear_factura("710", self.hoy)
+
+        db.actualizar_campos_factura(
+            factura,
+            {
+                "descripcion": "Solo cambia el detalle",
+                "placas": "ABC123",
+                "subtotal_cop": 100_000,
+                "iva_cop": 0,
+                "retefuente_cop": 0,
+                "ica_cop": 0,
+            },
+            self.ruta,
+        )
+
+        editada = db.obtener_factura(factura, self.ruta)
+        self.assertEqual(editada["factura"], "FEBA710")
+        self.assertEqual(editada["fecha"], self.hoy.isoformat())
+        self.assertEqual(
+            editada["vencimiento"], (self.hoy + timedelta(days=30)).isoformat()
+        )
+
+    def test_editar_rechaza_numero_repetido_en_la_misma_empresa(self) -> None:
+        self.crear_factura("720", self.hoy)
+        factura = self.crear_factura("721", self.hoy)
+
+        with self.assertRaises(db.ErrorCartera) as contexto:
+            db.actualizar_campos_factura(
+                factura,
+                {
+                    "numero": "720",
+                    "descripcion": "Duplicada",
+                    "placas": "ABC123",
+                    "subtotal_cop": 100_000,
+                    "iva_cop": 0,
+                    "retefuente_cop": 0,
+                    "ica_cop": 0,
+                },
+                self.ruta,
+            )
+        self.assertIn("ya existe", str(contexto.exception))
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["factura"], "FEBA721")
+
+    def test_editar_rechaza_vencimiento_anterior_a_la_emision(self) -> None:
+        factura = self.crear_factura("730", self.hoy)
+
+        with self.assertRaises(db.ErrorCartera):
+            db.actualizar_campos_factura(
+                factura,
+                {
+                    "fecha": self.hoy,
+                    "vencimiento": self.hoy - timedelta(days=1),
+                    "descripcion": "Fechas invertidas",
+                    "placas": "ABC123",
+                    "subtotal_cop": 100_000,
+                    "iva_cop": 0,
+                    "retefuente_cop": 0,
+                    "ica_cop": 0,
+                },
+                self.ruta,
+            )
+
     def test_factura_manual_no_registra_nit(self) -> None:
         factura = self.crear_factura("400", self.hoy)
 
         self.assertEqual(db.obtener_factura(factura, self.ruta)["nit"], "")
+
+    def test_sugerencias_incluyen_clientes_pagados_y_no_repiten_razones_sociales(self) -> None:
+        factura = self.crear_factura("500", self.hoy)
+        db.registrar_abono(
+            empresa_codigo="NOVASA",
+            cliente_id=1,
+            fecha=self.hoy,
+            referencia="PAGO-TOTAL",
+            monto_cop=100_000,
+            aplicaciones=[{"factura_id": factura, "monto_cop": 100_000}],
+            ruta=self.ruta,
+        )
+        self.assertEqual(db.clientes_con_saldo("NOVASA", self.ruta), [])
+        self.assertEqual(db.listar_nombres_clientes(self.ruta), ["Cliente de prueba SAS"])
+        datos = dict(db.obtener_factura(factura, self.ruta))
+        datos.update(empresa_codigo="LUAC", prefijo="LUA", numero="500")
+        db.crear_factura(datos, self.ruta)
+        self.assertEqual(db.listar_nombres_clientes(self.ruta), ["Cliente de prueba SAS"])
+        datos.update(numero="501", cliente="Alimentos de prueba SAS")
+        db.crear_factura(datos, self.ruta)
+        self.assertEqual(
+            db.listar_nombres_clientes(self.ruta),
+            ["Alimentos de prueba SAS", "Cliente de prueba SAS"],
+        )
 
 
 if __name__ == "__main__":

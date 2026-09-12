@@ -396,11 +396,29 @@ def actualizar_campos_factura(
     datos: Mapping[str, Any],
     ruta: str | Path | None = None,
 ) -> None:
-    """Actualiza los campos operativos editables sin alterar los abonos aplicados."""
+    """Actualiza los campos operativos editables sin alterar los abonos aplicados.
+
+    También permite corregir errores de digitación en el número de factura y
+    en las fechas de emisión y vencimiento; cuando esos campos no llegan, se
+    conservan los valores guardados.
+    """
 
     inicializar(ruta)
     with _transaccion(ruta) as conexion:
         anterior = _factura_para_editar(conexion, int(factura_id))
+        numero = _texto(
+            datos.get("numero", anterior["numero"]),
+            "Número de factura",
+            obligatorio=True,
+        ).upper()
+        fecha = _fecha(datos.get("fecha", anterior["fecha"]), "Fecha de emisión")
+        vencimiento = _fecha(
+            datos.get("vencimiento", anterior["vencimiento"]),
+            "Fecha de vencimiento",
+            obligatoria=False,
+        )
+        if vencimiento and vencimiento < fecha:
+            raise ErrorCartera("El vencimiento no puede ser anterior a la fecha de emisión.")
         valores = {
             "subtotal_cop": _pesos(datos.get("subtotal_cop"), "Subtotal"),
             "iva_cop": _pesos(datos.get("iva_cop"), "IVA"),
@@ -414,24 +432,34 @@ def actualizar_campos_factura(
             raise ErrorCartera(
                 "El total nuevo no puede ser menor que los abonos ya aplicados."
             )
-        conexion.execute(
-            """
-            UPDATE facturas_manual
-            SET descripcion = ?, placas = ?, subtotal_cop = ?, iva_cop = ?,
-                retefuente_cop = ?, ica_cop = ?, actualizada_en = ?
-            WHERE id = ?
-            """,
-            (
-                _texto(datos.get("descripcion"), "Detalle del servicio"),
-                _texto(datos.get("placas"), "Placas"),
-                valores["subtotal_cop"],
-                valores["iva_cop"],
-                valores["retefuente_cop"],
-                valores["ica_cop"],
-                _ahora(),
-                int(factura_id),
-            ),
-        )
+        try:
+            conexion.execute(
+                """
+                UPDATE facturas_manual
+                SET numero = ?, fecha = ?, vencimiento = ?,
+                    descripcion = ?, placas = ?, subtotal_cop = ?, iva_cop = ?,
+                    retefuente_cop = ?, ica_cop = ?, actualizada_en = ?
+                WHERE id = ?
+                """,
+                (
+                    numero,
+                    fecha,
+                    vencimiento,
+                    _texto(datos.get("descripcion"), "Detalle del servicio"),
+                    _texto(datos.get("placas"), "Placas"),
+                    valores["subtotal_cop"],
+                    valores["iva_cop"],
+                    valores["retefuente_cop"],
+                    valores["ica_cop"],
+                    _ahora(),
+                    int(factura_id),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ErrorCartera(
+                f"La factura {anterior['prefijo']}{numero} ya existe para "
+                f"{anterior['empresa_codigo']}."
+            ) from exc
         _registrar(
             conexion,
             "factura_manual",
@@ -567,6 +595,20 @@ def resumen_cartera(
         "facturas_pendientes": sum(1 for f in facturas if int(f["saldo_cop"]) > 0),
         "facturas_vencidas": sum(1 for f in facturas if f["estado"] == "VENCIDA"),
     }
+
+
+def listar_nombres_clientes(ruta: str | Path | None = None) -> list[str]:
+    """Razones sociales registradas, incluidas las que ya no tienen deuda."""
+
+    inicializar(ruta)
+    with _lectura(ruta) as conexion:
+        filas = conexion.execute("SELECT nombre FROM clientes ORDER BY id").fetchall()
+    nombres: dict[str, str] = {}
+    for fila in filas:
+        nombre = str(fila["nombre"]).strip()
+        if nombre:
+            nombres.setdefault(nombre.casefold(), nombre)
+    return sorted(nombres.values(), key=str.casefold)
 
 
 def clientes_con_saldo(
