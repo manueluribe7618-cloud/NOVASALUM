@@ -413,3 +413,35 @@ autorización de Finanzas o del dueño.
   Transaction pooler en `.streamlit/secrets.toml` como `SUPABASE_DB_URL`.
   Con la llave puesta se hace la primera prueba en vivo (crear una factura de
   prueba, abonarla, releerla y borrarla) antes de digitar las reales.
+
+## 2026-09-11 — Supabase conectado y verificado en vivo
+
+- Se creó el proyecto en Supabase (región us-west-2) y se configuró
+  `SUPABASE_DB_URL` en `.streamlit/secrets.toml` con la URI del Transaction
+  pooler (puerto 6543). El archivo está protegido por `.gitignore`.
+- Las siete tablas quedaron creadas en la nube y las tres empresas sembradas.
+- Prueba en vivo contra Supabase real, superada: guardar una factura con
+  impuestos, releerla completa (montos, fechas, días de mora, estado), rechazo
+  del consecutivo repetido, abono aplicado con recálculo de saldo y estado,
+  rechazo de un abono que supera el saldo, rastro de auditoría, y lectura del
+  listado, el resumen y los clientes con saldo. Datos de prueba eliminados y
+  contadores reiniciados: la primera factura real será la número 1.
+- Dos defectos reales encontrados por esa prueba y corregidos:
+  1. `GROUP BY` incompatible. SQLite acepta seleccionar columnas que no están
+     agrupadas; Postgres no. Las consultas del listado de facturas y del
+     listado de abonos agrupaban solo por la factura o el abono, y al leer
+     desde Supabase fallaban con `GroupingError`. Ahora agrupan también por la
+     llave primaria del cliente.
+  2. Precedencia del motor. Streamlit exporta por su cuenta los valores de
+     `secrets.toml` al entorno del proceso, así que al existir la llave de
+     Supabase, las pruebas que apuntaban a una base temporal mediante
+     `NOVASALUM_DB` terminaron **escribiendo en la base de producción**. Se
+     corrigió: señalar un archivo local —por parámetro `ruta` o por
+     `NOVASALUM_DB`— siempre tiene prioridad sobre la nube. Queda cubierto por
+     una prueba propia.
+- Impacto contable: ninguno. Las fórmulas, el motor FIFO y el redondeo no se
+  tocaron; los dos arreglos son de dialecto de base de datos y de selección de
+  destino.
+- Validación: 78 pruebas en verde (una nueva por la precedencia), pyflakes
+  limpio, y la aplicación completa verificada arrancando contra la nube con el
+  letrero «Datos: Supabase (nube)» visible en la barra lateral.

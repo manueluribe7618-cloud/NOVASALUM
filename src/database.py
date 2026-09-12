@@ -96,13 +96,28 @@ def url_supabase() -> str:
 
 
 def _usa_postgres(ruta: str | Path | None) -> bool:
-    return ruta is None and bool(url_supabase())
+    """Decide el motor. Señalar un archivo local SIEMPRE gana sobre la nube.
+
+    Hay dos formas de señalar un archivo: pasar ``ruta`` o definir la variable
+    ``NOVASALUM_DB``. Ambas son órdenes explícitas de trabajar en local y deben
+    respetarse aunque exista una URL de Supabase configurada. Esto no es un
+    detalle: Streamlit exporta por sí solo los valores de ``secrets.toml`` al
+    entorno del proceso, así que sin esta precedencia una prueba —o cualquier
+    script apuntando a una base temporal— terminaría escribiendo en la base de
+    producción sin que nadie lo pidiera.
+    """
+
+    if ruta is not None:
+        return False
+    if os.getenv("NOVASALUM_DB", "").strip():
+        return False
+    return bool(url_supabase())
 
 
 def descripcion_almacen() -> str:
     """Dónde se están guardando los datos, para decirlo en la interfaz."""
 
-    if url_supabase():
+    if _usa_postgres(None):
         return "Supabase (nube)"
     return f"SQLite local · {_ruta_base().name}"
 
@@ -688,7 +703,10 @@ def _filas_facturas(
         INNER JOIN clientes c ON c.id = f.cliente_id
         LEFT JOIN aplicaciones_abono a ON a.factura_id = f.id
         {clausula}
-        GROUP BY f.id
+        -- Se agrupa también por c.id porque Postgres exige que toda columna
+        -- fuera de un agregado dependa de la clave agrupada; con la llave
+        -- primaria de cada tabla presente, el resto de sus columnas es válido.
+        GROUP BY f.id, c.id
         ORDER BY f.fecha ASC, f.id ASC
     """
     hoy = date.today()
@@ -955,7 +973,9 @@ def listar_abonos(
             INNER JOIN clientes c ON c.id = a.cliente_id
             LEFT JOIN aplicaciones_abono ap ON ap.abono_id = a.id
             {filtros}
-            GROUP BY a.id
+            -- Igual que en el listado de facturas: la llave primaria de cada
+            -- tabla debe estar en el GROUP BY para que Postgres lo acepte.
+            GROUP BY a.id, c.id
             ORDER BY a.fecha DESC, a.id DESC
             """,
             parametros,

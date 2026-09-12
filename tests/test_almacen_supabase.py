@@ -36,6 +36,21 @@ class SeleccionDeMotorTests(unittest.TestCase):
             self.assertFalse(db._usa_postgres(Path("cualquiera.db")))
             self.assertFalse(db._usa_postgres("cualquiera.db"))
 
+    def test_novasalum_db_tiene_prioridad_sobre_la_nube(self) -> None:
+        """Señalar un archivo local es una orden explícita y gana.
+
+        Streamlit exporta por su cuenta los valores de secrets.toml al entorno,
+        así que sin esta precedencia cualquier script o prueba que apunte a una
+        base temporal escribiría en la base de producción.
+        """
+
+        with patch.dict("os.environ", {
+            "SUPABASE_DB_URL": "postgresql://u:p@host/db",
+            "NOVASALUM_DB": "/tmp/cartera_temporal.db",
+        }):
+            self.assertFalse(db._usa_postgres(None))
+            self.assertIn("SQLite local", db.descripcion_almacen())
+
 
 class DialectoPostgresTests(unittest.TestCase):
     def test_el_esquema_postgres_no_conserva_autoincrement(self) -> None:
