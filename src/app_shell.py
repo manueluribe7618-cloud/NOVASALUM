@@ -2,6 +2,9 @@
 
 La configuración de Streamlit, la inicialización de la base y el enrutamiento
 de vistas se mantienen aquí para que ``app.py`` sea solo el punto de entrada.
+
+Cada cartera elige su propia empresa (``filtro_empresa_manual``,
+``filtro_empresa_siigo``…) para que cambiar de empresa en una no mueva la otra.
 """
 
 from __future__ import annotations
@@ -9,10 +12,14 @@ from __future__ import annotations
 import streamlit as st
 
 from src import database as db
-from src.ui.layout import active_company, render_page_header, render_sidebar
+from src.ui.layout import VISTA_MANUAL, active_company, render_page_header, render_sidebar
 from src.ui.styles import apply_global_styles
+from src.views.conciliacion import render_reconciliation
 from src.views.manual import render_manual_portfolio, show_payment_dialog
-from src.views.siigo import render_reconciliation, render_siigo_mirror
+from src.views.siigo import render_siigo_portfolio
+
+
+VISTA_SIIGO = "Espejo Siigo"
 
 
 def run_application() -> None:
@@ -27,23 +34,20 @@ def run_application() -> None:
     apply_global_styles()
     db.inicializar()
 
-    current_view = st.session_state.get("vista", "Cartera manual")
+    current_view = st.session_state.get("vista", VISTA_MANUAL)
     view = render_sidebar(current_view)
     st.session_state["vista"] = view
-    actions = render_page_header(manual_actions=view == "Cartera manual")
-    company = active_company()
+    actions = render_page_header(view=view)
     st.write("")
 
-    if actions.register_payment:
-        show_payment_dialog()
-
-    if view == "Cartera manual":
+    if view == VISTA_MANUAL:
+        if actions.register_payment:
+            show_payment_dialog()
         render_manual_portfolio(
-            company,
+            active_company("manual"),
             request_invoice=actions.register_invoice,
-            request_edit=actions.edit_invoice,
         )
-    elif view == "Espejo Siigo":
-        render_siigo_mirror(company)
+    elif view == VISTA_SIIGO:
+        render_siigo_portfolio(active_company("siigo"))
     else:
-        render_reconciliation(company)
+        render_reconciliation(active_company("conciliacion"))

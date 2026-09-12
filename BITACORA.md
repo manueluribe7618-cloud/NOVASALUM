@@ -148,3 +148,233 @@ autorización de Finanzas o del dueño.
   menos los abonos aplicados.
 - Validación: 8 pruebas correctas, compilación completa y demo local revisado
   con el formulario de impuestos y los filtros de año y mes.
+
+## 2026-09-09 — Porcentajes reactivos y autocompletado de razón social
+
+- Solicitud: digitar el porcentaje del subtotal para IVA, ICA y retefuente, y
+  recibir sugerencias de clientes mientras se escribe la razón social.
+- Cambio: el registro usa controles reactivos dentro de su ventana. Las tres
+  casillas de porcentaje aparecen desde el inicio, con tasa cero y hasta cuatro
+  decimales; al confirmar una casilla se recalculan los importes y el total antes
+  de guardar. Se mantienen las opciones de importe fijo y no aplica.
+- Cliente: selector buscable con coincidencias mientras se escribe y entrada de
+  nuevas razones sociales mediante Enter. Las sugerencias incluyen clientes de
+  las tres empresas y clientes que ya pagaron; cada razón social aparece una vez.
+- Edición: reutiliza los mismos controles; conserva los importes originales
+  hasta que el usuario elija una tasa o un valor diferente. La regla aplicada
+  se guarda en la auditoría, tanto al crear como al editar.
+- Impacto contable: se conserva el redondeo a peso entero y la fórmula
+  subtotal + IVA − retefuente − ICA. No se asignan tasas tributarias por defecto.
+- Validación: 14 pruebas automáticas correctas sobre bases temporales, incluyendo
+  actualización del subtotal, porcentajes decimales, importes guardados,
+  edición, sugerencias sin duplicados y reglas de abonos/FIFO.
+- Dependencia: Streamlit 1.58 o superior para el selector con búsqueda flexible
+  y aceptación de nuevas opciones.
+- Comprobación en localhost: al escribir «Trans» aparece «Transportes Andinos
+  SAS»; también se puede confirmar una razón social nueva y conservarla al
+  recalcular. Con subtotal 1.000.000, IVA 19 %, retefuente 2,5 % e ICA 0,414 %,
+  la ventana muestra 190.000, 25.000 y 4.140, y total 1.160.860. La prueba del
+  navegador se cerró sin guardar facturas en la cartera del usuario.
+
+## 2026-09-09 — Opciones de captura claras y movimiento suave
+
+- Solicitud: hacer explícita la opción de porcentaje, reducir las tasas a dos
+  decimales y agregar animaciones discretas a la interfaz.
+- Cambio: IVA, retefuente e ICA muestran permanentemente las opciones
+  «Porcentaje (%)», «Valor en pesos ($)» y «No aplica». El texto bajo la casilla
+  relaciona el porcentaje del subtotal con su resultado en COP.
+- Precisión: las tasas digitadas se redondean a dos decimales antes de calcular,
+  para que el importe corresponda exactamente con la tasa visible. Por ejemplo,
+  0,414 % se muestra y calcula como 0,41 %. Los importes de facturas existentes
+  se conservan al abrirlas para edición.
+- Animaciones: aparición breve de ventanas y paneles, respuesta al pulsar
+  botones y transición de foco y tarjetas. Se respeta la preferencia de reducir
+  movimiento del dispositivo.
+- Validación: 14 pruebas correctas, incluidas persistencia con la precisión
+  nueva y conservación de importes al editar. Localhost revisado visualmente
+  con los tres modos y campos de dos decimales en la ventana de registro.
+
+## 2026-09-09 — Subtotal con puntos de miles
+
+- Solicitud: permitir el separador de miles con punto al digitar el subtotal.
+- Cambio: el subtotal de registro y edición acepta 1.500.000, 1500000 y
+  $ 1.500.000. Al confirmar el campo con Enter o al salir, se muestran los
+  puntos automáticamente. El dato se convierte a pesos enteros antes de los
+  cálculos y la persistencia.
+- Validación: una agrupación incorrecta como 1.5 no se interpreta como 15;
+  se muestra un mensaje y se impide guardar hasta corregirla.
+- Pruebas: 17 pruebas correctas, incluyendo normalización, registro, edición,
+  cálculo de impuestos y rechazo de formatos ambiguos. En localhost se verificó
+  que 1500000 se convierte en 1.500.000 y que 2.500.000 con IVA 19 % produce
+  475.000 de IVA y 2.975.000 de total, sin guardar datos de prueba en la cartera.
+
+## 2026-09-09 — Estado compacto y edición desde la fila
+
+- Solicitud: mantener las filas neutras, concentrar el color en la columna
+  Estado y abrir la edición con doble clic sobre la factura.
+- Presentación: Estado permanece fijo a la derecha, con etiqueta y palabra:
+  Pagada en amarillo, Abonada en naranja, Vencida en rojo suave y Pendiente o
+  Anulada en gris. Los importes se alinean a la derecha.
+- Interacción: doble clic sobre cualquier celda de una factura, o Enter con
+  una celda enfocada, abre directamente su ventana de edición. Se retira el
+  botón Editar factura de la cabecera y no se pide buscar la factura de nuevo.
+- Identificación: se usa el ID de la factura, independiente de la posición
+  tras ordenar o filtrar y de los números que coincidan entre empresas. Cada
+  gesto se consume una sola vez; al reabrir se recuperan los valores guardados
+  en lugar de un borrador cerrado sin guardar.
+- Impacto contable: ninguno sobre fórmulas ni estados; se reutilizan el
+  formulario, las validaciones y la auditoría existentes.
+- Validación: 19 pruebas correctas en bases temporales. Se verificaron el
+  guardado exclusivo de la factura indicada y la prevención de reaperturas
+  automáticas. En localhost se comprobaron etiquetas sobre filas neutras,
+  doble clic, reapertura tras ordenar y edición con Enter, sin guardar ni
+  anular registros de la cartera del usuario. Servidor local saludable.
+- Trabajo realizado en la rama main existente, sin crear ramas ni worktrees.
+
+## 2026-09-10 — Vista de cliente con desglose por empresa
+
+- Solicitud: al buscar un cliente específico, ver el total de sus facturas en
+  todas las empresas y, dentro de ese apartado, la separación por empresa,
+  porque cada abono se registra en una sola empresa y aplica solo a sus
+  facturas.
+- Cambio 1: el filtro de clientes ahora busca por razón social. Antes cada
+  cliente aparecía repetido por empresa («Cliente · FEBA», «Cliente · LUA»);
+  ahora una sola selección trae su cartera completa en las tres empresas.
+  Las selecciones guardadas con el formato anterior se descartan sin error.
+- Cambio 2: en la pestaña «Clientes y saldo pendiente» se agregó «Detalle del
+  cliente»: un buscador de razón social, el total combinado (facturado,
+  abonado y saldo de todas las empresas) y un bloque por empresa con sus
+  facturas y su saldo propio.
+- Cambio 3: cada bloque de empresa con saldo tiene el botón «＋ Abono aquí»,
+  que abre el diálogo de abono con la empresa y el cliente ya preseleccionados,
+  para que el pago quede registrado en la empresa correcta sin pasos de más.
+- Archivos: `src/views/manual.py` (filtro por razón social, detalle por
+  empresa, preselección del diálogo de abono) y `tests/test_customer_view.py`
+  (nuevo).
+- Impacto contable: ninguno. Solo agrupación y visualización; el registro de
+  abonos sigue pasando por `registrar_abono` sin cambios de fórmula ni de
+  validaciones.
+- Validación: 24 pruebas automáticas correctas (5 nuevas de esta vista), más
+  una prueba end-to-end con base temporal: cliente sembrado en dos empresas
+  mostró $ 25.513.000 combinados, bloques FEBA y LUA separados, y el botón
+  del bloque LUA abrió el diálogo con LUAC y el cliente preseleccionados.
+  En localhost, con datos reales, se revisó el detalle de Transportes Andinos
+  SAS y la preselección del abono; se cerró el diálogo sin aplicar pagos.
+
+## 2026-09-10 — Estado de cuenta por cliente igual al Excel
+
+- Solicitud: replicar dentro de la aplicación la forma del Excel de cartera
+  por cliente (una sección por empresa, columnas de la hoja, saldo de cada
+  empresa al pie y el SALDO EN CARTERA total resaltado), y cargar datos de
+  ejemplo para poder verlo.
+- Cambio: el «Detalle del cliente» ahora es un estado de cuenta: título
+  «Cliente · Empresa» por sección, columnas Factura, Fecha, Detalle del
+  servicio (texto completo), Placas, Sub valor factura, Impuestos, Retención,
+  ICA, Abono y Saldo pendiente; los conceptos en cero quedan en blanco como
+  las celdas vacías del Excel. Cada sección cierra con su saldo en rojo a la
+  derecha y el conjunto termina con la banda amarilla «SALDO EN CARTERA»,
+  acompañada de facturado y abonado totales. Se conserva el botón
+  «＋ Abono aquí» por empresa con el diálogo preseleccionado.
+- Datos: se registraron las facturas reales de TMP Izajes y Transportes S.A.S
+  de la hoja (FEBA2050; MSU647 con su abono de $ 4.500.000; MSU648; LUA1728;
+  LUA1739) usando crear_factura y registrar_abono, con vencimiento a 30 días.
+  FEBA2057 no se cargó: en la hoja está sin valores y la aplicación exige
+  total mayor que cero por diseño.
+- Archivos: `src/views/manual.py` (_statement_table y detalle),
+  `src/ui/styles.py` (cierres del estado de cuenta) y
+  `tests/test_customer_view.py`.
+- Impacto contable: ninguno. Presentación y carga de datos por las funciones
+  oficiales; las cifras cargadas cuadran peso a peso con la hoja:
+  810.000 + 2.050.000 + 2.754.000 = 5.614.000.
+- Validación: 26 pruebas automáticas correctas y pyflakes sin advertencias en
+  todo el proyecto. Prueba end-to-end con base temporal: registrar una
+  factura, editar su subtotal y aplicar un abono se reflejan de inmediato en
+  el estado de cuenta (810.000 → 910.000 → 510.000). Revisión visual en
+  localhost con los datos reales de TMP Izajes; fue necesario reiniciar el
+  servidor para tomar el código nuevo (la caché de módulos de Streamlit no
+  recarga sola los submódulos editados).
+
+## 2026-09-10 — Editar número de factura y fechas
+
+- Solicitud: además de las placas y el detalle, poder corregir el número de la
+  factura seleccionada y sus fechas, porque en la digitación a veces se
+  equivocan y la fecha es importante.
+- Cambio en base de datos: actualizar_campos_factura ahora también acepta
+  numero, fecha y vencimiento. Cuando no llegan, conserva los guardados; el
+  prefijo no se toca (viene de la empresa). Protecciones: número obligatorio,
+  vencimiento no puede quedar antes de la emisión, y un número repetido en la
+  misma empresa se rechaza con el mensaje «ya existe» sin alterar nada.
+- Cambio en interfaz: la ventana «Editar factura» muestra Número de factura,
+  Fecha de emisión y Vencimiento junto al detalle, las placas, el subtotal y
+  los impuestos. Los campos comienzan con los valores guardados.
+- Archivos: `src/database.py`, `src/views/manual.py`,
+  `tests/test_database.py`.
+- Impacto contable: ninguno en fórmulas. Corregir el vencimiento puede cambiar
+  el estado derivado (VENCIDA/PENDIENTE), que es exactamente la regla vigente
+  aplicada al dato corregido. La auditoría guarda antes y después completos.
+- Validación: 30 pruebas automáticas correctas (4 nuevas: corrección de
+  número y fechas, conservación cuando no se envían, duplicado rechazado,
+  vencimiento invertido rechazado) y pyflakes limpio. Prueba end-to-end del
+  formulario con base temporal: FEBA2075→FEBA2057 con fechas corregidas
+  quedó guardado, y el intento de duplicado mostró el error sin dañar datos.
+  Revisión visual en localhost con doble clic sobre MSU647; se cerró sin
+  guardar.
+
+## 2026-09-11 — Cartera Siigo independiente, leída factura por factura
+
+- Solicitud: que la cartera Siigo sea completamente independiente de la
+  manual, que se vea igual (mismo cuadro general y mismo estado de cuenta por
+  cliente y por empresa), que nadie digite nada, y que la información se
+  obtenga consultando cada factura individualmente en el API, con supervisión.
+- Por qué la consulta individual no era opcional: se comprobó que el listado
+  masivo de Siigo no entrega ítems ni retenciones. Con solo el listado, la
+  misma factura sale con estado DATO_INCOMPLETO, sin saldo, sin vencimiento y
+  con 0 días de mora, cuando en realidad llevaba 153 días vencida. Subtotal,
+  IVA, retefuente, ICA y el detalle del servicio quedan vacíos. El detalle por
+  factura (`GET /v1/invoices/{id}`, que no se usaba en ninguna parte del
+  proyecto) es la única fuente de esos datos.
+- Velocidad: el cliente de Siigo es seguro para hilos y pide el token una sola
+  vez. Medido contra un transporte simulado con 120 ms de latencia, 60
+  facturas tardan 7,34 s una por una y 1,08 s con seis consultas simultáneas.
+  La lectura usa seis por empresa.
+- Módulos nuevos: `src/siigo_lectura.py` (motor de lectura y reporte de
+  supervisión), `src/siigo_vista.py` (funciones puras de presentación),
+  `src/siigo_muestra.py` (muestra autónoma en formato Siigo),
+  `src/ui/grid.py` (grilla compartida por las dos carteras) y
+  `src/views/conciliacion.py` (la conciliación, mudada a su propio archivo).
+  `src/views/siigo.py` se reescribió completo.
+- Decisiones del dueño aplicadas: la columna «Abonos» queda vacía —Siigo no
+  informa el abono de cada factura y derivarlo de total − saldo sería inventar
+  una cifra—; no hay columna «Placas», porque Siigo no la guarda en un campo
+  propio y la placa viene dentro del texto de la descripción, que sí se
+  muestra; y se consultan todas las facturas del período.
+- Supervisión: marca de hora y origen de cada lectura, errores por empresa y
+  por factura, conteo de facturas sin detalle, y una tabla con facturas del
+  período, detalles leídos, fallidos, consultas al API y segundos por empresa.
+- Regla de honestidad: un dato que Siigo no entregó se muestra con raya, nunca
+  como «$ 0». Un cero afirma que no hay IVA; una raya dice que no se sabe.
+  Los totales cuentan aparte las facturas sin dato en vez de sumarlas como
+  cero. Las anuladas y las monedas distintas de COP no entran en los totales.
+- Tres fallas reales corregidas de paso: (1) la pantalla Siigo se caía al
+  abrirla sin `secrets.toml` —el caso de hoy— porque `st.secrets` no falla al
+  tocarlo sino al recorrerlo, fuera del try; (2) la «muestra visual» se
+  fabricaba copiando facturas y clientes REALES de la cartera manual y los
+  rotulaba como lectura de Siigo, lo que además hacía que la conciliación
+  saliera siempre cuadrada; (3) la empresa que mostraba la cartera Siigo la
+  decidía el filtro de la cartera manual, y el botón «＋ Registrar abono»
+  aparecía sobre la cartera Siigo pudiendo escribir en la cartera manual.
+- Impacto contable: ninguno en la cartera manual; sus cálculos, su grilla y su
+  comportamiento quedan idénticos. La cartera Siigo no escribe nada: el cliente
+  del API solo permite GET, salvo la autenticación.
+- Validación: 66 pruebas automáticas (36 nuevas) y pyflakes limpio en todo el
+  proyecto. Ninguna prueba abre un socket: el API se simula con el transporte
+  inyectable de `src/siigo.py`. Se blindó el «se ve igual» con una prueba que
+  compara las columnas de la cartera Siigo contra las de la manual, y la
+  independencia con pruebas de comportamiento: la vista se pinta igual con
+  toda lectura de la base manual rota, y no deja ninguna clave de sesión del
+  manual. Revisión visual en localhost con la muestra: cuadro general, estado
+  de cuenta por empresa con su total en rojo, banda amarilla SALDO EN CARTERA
+  y conciliación cruzando ambas carteras.
+- Pendiente para la primera lectura real: con credenciales configuradas, el
+  panel de supervisión mostrará cuántas facturas tiene un mes por empresa y
+  cuánto tarda; con esa cifra se decide si hace falta un tope por consulta.

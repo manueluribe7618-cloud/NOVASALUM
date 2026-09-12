@@ -19,13 +19,15 @@ ALL_COMPANIES = "TODAS"
 VIEWS = ("Cartera manual", "Espejo Siigo", "Conciliación")
 
 
+VISTA_MANUAL = "Cartera manual"
+
+
 @dataclass(frozen=True)
 class HeaderActions:
     """Acciones solicitadas desde los botones de la cabecera."""
 
     register_payment: bool = False
     register_invoice: bool = False
-    edit_invoice: bool = False
 
 
 def render_sidebar(current_view: str) -> str:
@@ -61,17 +63,24 @@ def render_sidebar(current_view: str) -> str:
     return selected_view
 
 
-def active_company() -> str:
-    """Obtiene la empresa seleccionada dentro del panel de filtros manual."""
+def active_company(scope: str = "manual") -> str:
+    """Obtiene la empresa elegida dentro del filtro de la vista indicada.
 
-    company = st.session_state.get("filtro_empresa_manual", ALL_COMPANIES)
+    Cada cartera tiene su propio selector (``filtro_empresa_manual``,
+    ``filtro_empresa_siigo``…) para que cambiar de empresa en una no mueva la
+    otra. ``empresa_activa`` la escribe únicamente la cartera manual, porque es
+    la preselección del diálogo de abono, que solo existe ahí.
+    """
+
+    company = st.session_state.get(f"filtro_empresa_{scope}", ALL_COMPANIES)
     if company not in {ALL_COMPANIES, *db.EMPRESAS}:
         company = ALL_COMPANIES
-    st.session_state["empresa_activa"] = company
+    if scope == "manual":
+        st.session_state["empresa_activa"] = company
     return company
 
 
-def render_page_header(*, manual_actions: bool) -> HeaderActions:
+def render_page_header(*, view: str) -> HeaderActions:
     """Muestra la cabecera y concentra las acciones de cartera manual."""
 
     left, right = st.columns([4, 1.3], vertical_alignment="center")
@@ -86,19 +95,19 @@ def render_page_header(*, manual_actions: bool) -> HeaderActions:
             unsafe_allow_html=True,
         )
     with right:
+        # Las dos acciones escriben en la cartera manual. Fuera de ella no se
+        # dibujan: la cartera Siigo es de solo consulta y nadie la digita.
         register_invoice = False
-        edit_invoice = False
-        if manual_actions:
+        register_payment = False
+        if view == VISTA_MANUAL:
             register_invoice = st.button(
                 "＋ Registrar factura", type="primary", use_container_width=True
             )
-            edit_invoice = st.button("Editar factura", use_container_width=True)
-        register_payment = st.button(
-            "＋ Registrar abono", type="primary", use_container_width=True
-        )
+            register_payment = st.button(
+                "＋ Registrar abono", type="primary", use_container_width=True
+            )
 
     return HeaderActions(
         register_payment=register_payment,
         register_invoice=register_invoice,
-        edit_invoice=edit_invoice,
     )
