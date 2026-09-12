@@ -16,7 +16,7 @@ from src.ui.components import activity_summary
 
 
 ALL_COMPANIES = "TODAS"
-VIEWS = ("Cartera manual", "Espejo Siigo", "Conciliación")
+VIEWS = ("Cartera manual", "Espejo Siigo", "Conciliación", "Seguridad")
 
 
 VISTA_MANUAL = "Cartera manual"
@@ -49,6 +49,12 @@ def render_sidebar(current_view: str) -> str:
             index=VIEWS.index(selected_view),
             label_visibility="collapsed",
         )
+        st.divider()
+        from src.ui.ingreso import cerrar_sesion, render_identidad_lateral
+
+        if render_identidad_lateral():
+            cerrar_sesion()
+            st.rerun()
         st.divider()
         activity = db.resumen_actividad()
         if activity:

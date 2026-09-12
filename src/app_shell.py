@@ -18,10 +18,12 @@ from src.ui.layout import VISTA_MANUAL, active_company, render_page_header, rend
 from src.ui.styles import apply_global_styles
 from src.views.conciliacion import render_reconciliation
 from src.views.manual import render_manual_portfolio, show_payment_dialog
+from src.ui.ingreso import render_ingreso, render_seguridad, usuario_actual
 from src.views.siigo import render_siigo_portfolio
 
 
 VISTA_SIIGO = "Espejo Siigo"
+VISTA_SEGURIDAD = "Seguridad"
 
 
 def run_application() -> None:
@@ -60,6 +62,12 @@ def run_application() -> None:
         )
         st.stop()
 
+    # Puerta de acceso: nada de la cartera se muestra sin ingresar. Va antes
+    # que cualquier lectura de datos, no solo antes de dibujarlos.
+    if usuario_actual() is None:
+        render_ingreso()
+        st.stop()
+
     current_view = st.session_state.get("vista", VISTA_MANUAL)
     view = render_sidebar(current_view)
     st.session_state["vista"] = view
@@ -75,5 +83,7 @@ def run_application() -> None:
         )
     elif view == VISTA_SIIGO:
         render_siigo_portfolio(active_company("siigo"))
+    elif view == VISTA_SEGURIDAD:
+        render_seguridad()
     else:
         render_reconciliation(active_company("conciliacion"))

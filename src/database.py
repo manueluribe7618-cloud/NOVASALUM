@@ -370,6 +370,33 @@ _ESQUEMA_BASE = """
                 ON abonos_manual(cliente_id, fecha);
             CREATE INDEX IF NOT EXISTS idx_aplicaciones_factura
                 ON aplicaciones_abono(factura_id);
+
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT NOT NULL UNIQUE,
+                nombre TEXT NOT NULL,
+                clave_hash TEXT NOT NULL,
+                rol TEXT NOT NULL DEFAULT 'admin',
+                activo INTEGER NOT NULL DEFAULT 1 CHECK (activo IN (0, 1)),
+                intentos_fallidos INTEGER NOT NULL DEFAULT 0,
+                bloqueado_hasta TEXT,
+                ultimo_ingreso TEXT,
+                creado_en TEXT NOT NULL,
+                actualizado_en TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS intentos_ingreso (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT NOT NULL,
+                exitoso INTEGER NOT NULL DEFAULT 0 CHECK (exitoso IN (0, 1)),
+                motivo TEXT NOT NULL DEFAULT '',
+                creado_en TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_intentos_fecha
+                ON intentos_ingreso(creado_en);
+            CREATE INDEX IF NOT EXISTS idx_intentos_usuario
+                ON intentos_ingreso(usuario, creado_en);
 """
 
 

@@ -445,3 +445,47 @@ autorización de Finanzas o del dueño.
 - Validación: 78 pruebas en verde (una nueva por la precedencia), pyflakes
   limpio, y la aplicación completa verificada arrancando contra la nube con el
   letrero «Datos: Supabase (nube)» visible en la barra lateral.
+
+## 2026-09-12 — Control de acceso con usuario y contraseña
+
+- Solicitud del dueño: un ingreso con usuario y contraseña, con límite de
+  intentos y un reporte que avise si alguien está probando repetidamente.
+  Se le había recomendado usar la lista de correos de Streamlit Cloud en vez
+  de construirlo; el dueño confirmó su decisión y se construyó.
+- Cómo se protegen las contraseñas: no se guardan. Se guarda el resultado de
+  `scrypt` (que viene en Python, sin dependencias nuevas), con sal aleatoria
+  por contraseña y los parámetros escritos dentro de cada hash para poder
+  endurecerlos después sin invalidar las existentes. Medido: ~30 ms y 16 MB
+  por intento, lo que hace impráctico probar contraseñas en masa.
+- Defensas concretas: comparación en tiempo constante (`hmac.compare_digest`);
+  hash de relleno cuando el usuario no existe, para que la respuesta tarde lo
+  mismo y no se pueda averiguar qué cuentas son reales; el mensaje de error
+  nunca distingue entre usuario inexistente y contraseña mala; rechazo de
+  contraseñas cortas, solo numéricas o de diccionario.
+- Bloqueo: 5 intentos fallidos bloquean la cuenta 15 minutos. Estando
+  bloqueada, ni la contraseña correcta entra. Un ingreso correcto reinicia el
+  contador y el bloqueo expira solo.
+- Reporte: pantalla «Seguridad» con ingresos correctos y fallidos de las
+  últimas 24 horas, fallidos de la última hora, desglose por usuario, cuentas
+  bloqueadas con botón para desbloquear (solo admin), el detalle de cada
+  intento con su motivo, y las cuentas existentes. La alerta se enciende sola
+  cuando hay una cuenta bloqueada o cuando se superan 10 fallos en una hora.
+- La primera cuenta se crea desde la terminal con `python crear_usuario.py`,
+  no desde la web: si la aplicación permitiera crearla por internet,
+  cualquiera que llegara a la dirección antes que el dueño podría quedarse
+  con ella. Después, un admin puede crear más cuentas desde la pantalla de
+  Seguridad.
+- Defecto grave encontrado y corregido durante la construcción: el error de
+  autenticación se lanzaba **dentro** de la transacción, de modo que el
+  `rollback` deshacía el conteo de intentos y el registro del intento. En la
+  práctica el contador siempre decía «te quedan 4» y **el bloqueo nunca se
+  habría activado**. Ahora el resultado se decide dentro de la transacción y
+  el error se lanza después de confirmar. Queda cubierto por una prueba de
+  regresión propia.
+- Impacto contable: ninguno. No se tocó ninguna fórmula, ni el motor FIFO, ni
+  el redondeo.
+- Validación: 110 pruebas en verde (32 nuevas), pyflakes limpio. Las pruebas
+  cubren cada forma concreta de entrar sin permiso: clave incorrecta, usuario
+  inexistente, cuenta desactivada, cuenta bloqueada, hash corrupto, y que sin
+  ingresar no se alcance a ver ni una cifra de la cartera. Verificado además
+  sobre la aplicación real y contra Supabase.
