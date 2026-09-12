@@ -489,3 +489,59 @@ autorización de Finanzas o del dueño.
   inexistente, cuenta desactivada, cuenta bloqueada, hash corrupto, y que sin
   ingresar no se alcance a ver ni una cifra de la cartera. Verificado además
   sobre la aplicación real y contra Supabase.
+
+## 2026-09-12 — Activación privada de la primera cuenta
+
+- Problema reportado: la pantalla de ingreso mostraba un error y un comando de
+  terminal, sin permitir continuar. Se confirmó mediante lectura que la base
+  Supabase configurada tenía cero cuentas.
+- Solución: `crear_usuario.py --web` prepara un enlace privado temporal y un
+  servidor conectado a la misma base, escuchando exclusivamente en
+  `127.0.0.1`. La pantalla «Crea tu acceso» permite que el dueño elija usuario,
+  nombre y contraseña sin enviarla al chat ni usar una clave predeterminada.
+- El servidor guarda solo el hash de la invitación en su entorno; vence en
+  30 minutos. El enlace se retira de la dirección al abrirlo. Sin invitación
+  válida no se ofrece registro público ni se muestran datos de cartera.
+- La creación comprueba dentro de una transacción que aún no haya cuentas.
+  SQLite serializa mediante BEGIN IMMEDIATE y Postgres bloquea la tabla durante
+  la comprobación e inserción. Dos solicitudes simultáneas no crean dos
+  administradores iniciales. Con cualquier cuenta existente se cierra esta vía.
+- Después de crear la cuenta se limpian la invitación y los campos de clave y
+  se vuelve al ingreso normal. Se conservan scrypt, el bloqueo por intentos y
+  la vigilancia de accesos. No se modifican datos ni cálculos de las carteras.
+- Validación: 117 pruebas correctas sobre bases temporales, incluidas siete
+  nuevas de activación, concurrencia, expiración, contraseñas distintas y
+  regreso al ingreso. Pyflakes y revisión de diferencias sin errores.
+- Se dejó el servidor local activo y la pantalla privada abierta. La cuenta
+  real queda pendiente de que el dueño escriba sus credenciales y pulse
+  «Crear mi cuenta»; no se crearon cuentas de prueba en Supabase.
+- Todo el trabajo permanece en main, sin ramas ni worktrees adicionales.
+
+## 2026-09-12 — Usuario y contraseña administrados en Secrets
+
+- Corrección del dueño: quiere conservar el usuario y la contraseña dentro de
+  Streamlit para poder consultarlos o cambiarlos si sus jefes los olvidan.
+- Se sustituye la activación anterior por una única sección `[acceso]` en los
+  Secrets, con `usuario` y `contrasena`. La pantalla solo pide esos dos datos y
+  ofrece Entrar. Se retiraron el servidor de activación, sus invitaciones y
+  los formularios de crear cuentas o cambiar contraseñas desde la aplicación.
+- Secrets es la autoridad del ingreso: cuentas o claves anteriores en la base
+  no habilitan la web. El cambio de credenciales invalida la sesión en la
+  siguiente ejecución completa. Sin configuración válida el acceso permanece
+  cerrado; no existe una contraseña predeterminada.
+- Se conservan el bloqueo de cinco intentos durante quince minutos y el
+  reporte de accesos. La base guarda solo metadatos e intentos para la cuenta
+  configurada; su contraseña y su hash no se copian allí. El verificador se
+  calcula en memoria y no se muestra en la interfaz.
+- Se documentó el bloque en `.streamlit/secrets.toml.ejemplo` y se preparó el
+  bloque local vacío para que el dueño elija ambos valores. Las credenciales
+  existentes de Siigo y Supabase se conservaron; el archivo real sigue excluido
+  de Git. No se crearon cuentas reales ni se eligieron claves por el dueño.
+- Validación: 118 pruebas correctas en bases temporales, pyflakes limpio y
+  pantalla local verificada con solo Usuario, Contraseña y Entrar. Se prueban
+  primer ingreso desde Secrets, rechazo de claves antiguas, bloqueo y cambio
+  de configuración. Todo permanece en main.
+- Publicación autorizada por el dueño: se prepara esta actualización en main
+  para el despliegue conectado a GitHub. La contraseña real se configura en
+  los Secrets de Streamlit Cloud; el archivo local no se publica. Se corrigió
+  también el mensaje de la herramienta heredada para que no prometa acceso web.

@@ -1,8 +1,8 @@
 """Crea una cuenta de NOVASALUM desde la terminal.
 
-Se hace desde aquí y no desde la web a propósito: si la aplicación permitiera
-crear la primera cuenta por internet, cualquiera que llegara a la dirección
-antes que el dueño podría quedarse con ella.
+Herramienta heredada de cuentas en base de datos. El ingreso web utiliza
+exclusivamente la sección [acceso] de los Secrets de Streamlit; crear una
+cuenta aquí no habilita el acceso web.
 
 Uso:
     python crear_usuario.py
@@ -97,7 +97,7 @@ def main() -> int:
     print()
     print("  " + "-" * 54)
     print(f"  Cuenta creada: {auth.normalizar_usuario(usuario)}  ·  rol {rol}")
-    print("  Ya puedes entrar a la aplicación con ella.")
+    print("  El ingreso web se configura en [acceso] de los Secrets de Streamlit.")
     print("  " + "-" * 54)
     return 0
 

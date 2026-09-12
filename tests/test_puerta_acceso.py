@@ -36,8 +36,9 @@ class PuertaDeAccesoTests(unittest.TestCase):
         self.addCleanup(self.entorno.stop)
         auth.crear_usuario("martin", CLAVE, nombre="Martín")
 
-    def _app(self) -> AppTest:
+    def _app(self, *, configurar: bool = True) -> AppTest:
         prueba = AppTest.from_file(str(Path(RAIZ) / "app.py"), default_timeout=90)
+        prueba.secrets["acceso"] = {"usuario": "martin", "contrasena": CLAVE} if configurar else {}
         prueba.run()
         return prueba
 
@@ -96,14 +97,48 @@ class PuertaDeAccesoTests(unittest.TestCase):
             "la contraseña quedó en el estado de sesión",
         )
 
-    def test_sin_ninguna_cuenta_creada_explica_como_crearla(self) -> None:
+    def test_sin_secretos_muestra_ingreso_pendiente_sin_registro_publico(self) -> None:
+        otro, ruta = _preparar_base()
+        self.addCleanup(otro.cleanup)
+        with patch.dict("os.environ", {"NOVASALUM_DB": str(ruta)}):
+            prueba = self._app(configurar=False)
+            self.assertFalse(prueba.exception, prueba.exception)
+            self.assertIn("Secrets", " ".join(bloque.value for bloque in prueba.info))
+            self.assertTrue(prueba.text_input(key="ingreso_usuario").disabled)
+            self.assertTrue(prueba.text_input(key="ingreso_clave").disabled)
+            self.assertTrue(prueba.button[0].disabled)
+            self.assertFalse(prueba.code)
+
+    def test_secretos_permiten_ingresar_sin_crear_una_cuenta_previamente(self) -> None:
         otro, ruta = _preparar_base()
         self.addCleanup(otro.cleanup)
         with patch.dict("os.environ", {"NOVASALUM_DB": str(ruta)}):
             prueba = self._app()
-            self.assertFalse(prueba.exception, prueba.exception)
-            codigo = " ".join(bloque.value for bloque in prueba.code)
-            self.assertIn("crear_usuario.py", codigo)
+            self.assertFalse(prueba.text_input(key="ingreso_usuario").disabled)
+            self.assertEqual([b.label for b in prueba.button], ["Entrar"])
+            prueba.text_input(key="ingreso_usuario").set_value("martin")
+            prueba.text_input(key="ingreso_clave").set_value(CLAVE)
+            prueba.button[0].click().run()
+            self.assertFalse(prueba.exception)
+            self.assertEqual(prueba.session_state["usuario_sesion"].usuario, "martin")
+
+    def test_cambiar_secrets_cierra_sesion_y_rechaza_la_clave_anterior(self) -> None:
+        prueba = self._app()
+        prueba.text_input(key="ingreso_usuario").set_value("martin")
+        prueba.text_input(key="ingreso_clave").set_value(CLAVE)
+        prueba.button[0].click().run()
+        prueba.secrets["acceso"]["contrasena"] = "UnaClaveNueva2026"
+        prueba.run()
+        self.assertFalse(prueba.exception)
+        self.assertTrue(prueba.text_input(key="ingreso_usuario"))
+        prueba.text_input(key="ingreso_usuario").set_value("martin")
+        prueba.text_input(key="ingreso_clave").set_value(CLAVE)
+        prueba.button[0].click().run()
+        self.assertTrue(prueba.error)
+        prueba.text_input(key="ingreso_clave").set_value("UnaClaveNueva2026")
+        prueba.button[0].click().run()
+        self.assertFalse(prueba.exception)
+        self.assertEqual(prueba.session_state["usuario_sesion"].usuario, "martin")
 
 
 if __name__ == "__main__":

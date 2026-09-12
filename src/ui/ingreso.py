@@ -19,25 +19,46 @@ from src import autenticacion as auth
 
 
 CLAVE_SESION = "usuario_sesion"
+CLAVE_REVISION = "acceso_revision"
+
+
+def _leer_credencial() -> auth.CredencialConfigurada:
+    try:
+        return auth.credencial_desde_secretos(st.secrets)
+    except auth.ErrorAcceso:
+        raise
+    except Exception:
+        raise auth.ErrorAcceso("Configura el usuario y la contraseña en los Secrets de Streamlit.") from None
 
 
 def usuario_actual() -> auth.Usuario | None:
     """Quién está usando la aplicación en esta sesión, si ya ingresó."""
 
     valor = st.session_state.get(CLAVE_SESION)
-    return valor if isinstance(valor, auth.Usuario) else None
+    if not isinstance(valor, auth.Usuario):
+        return None
+    try:
+        credencial = _leer_credencial()
+    except auth.ErrorAcceso:
+        cerrar_sesion()
+        return None
+    if valor.usuario != credencial.usuario or st.session_state.get(CLAVE_REVISION) != credencial.revision:
+        cerrar_sesion()
+        return None
+    return valor
 
 
 def cerrar_sesion() -> None:
     """Termina la sesión y borra todo rastro de trabajo en pantalla."""
 
     st.session_state.pop(CLAVE_SESION, None)
+    st.session_state.pop(CLAVE_REVISION, None)
     # Se limpian filtros y formularios para que la siguiente persona no herede
     # la pantalla de la anterior.
     for clave in [
         k for k in st.session_state
         if k.startswith(("filtro_", "abono_", "factura_", "editar_factura_",
-                         "detalle_cliente_", "siigo_", "vista"))
+                         "detalle_cliente_", "siigo_", "vista", "ingreso_", "activacion_"))
     ]:
         st.session_state.pop(clave, None)
 
@@ -62,31 +83,30 @@ def render_ingreso() -> None:
     )
     st.write("")
 
-    if not auth.hay_usuarios():
-        st.error("Todavía no hay ninguna cuenta creada en esta base de datos.")
-        st.markdown(
-            "Para crear la primera cuenta, abre una terminal en la carpeta del "
-            "proyecto y ejecuta:"
-        )
-        st.code("python crear_usuario.py", language="bash")
-        st.caption(
-            "Se hace desde la terminal a propósito: si la aplicación permitiera "
-            "crear la primera cuenta desde la web, cualquiera que llegara a la "
-            "dirección antes que tú podría quedarse con ella."
-        )
-        return
+    # Descarta enlaces y borradores de la activación anterior.
+    if "activar" in st.query_params:
+        del st.query_params["activar"]
+    for key in list(st.session_state):
+        if key.startswith("activacion_") or key == "cuenta_recien_creada":
+            st.session_state.pop(key, None)
+    try:
+        credencial = _leer_credencial()
+    except auth.ErrorAcceso as exc:
+        credencial = None
+        st.info(str(exc))
+    pendiente = credencial is None
 
     columna, _ = st.columns([1.2, 1])
     with columna:
         with st.form("ingreso_novasalum"):
-            usuario = st.text_input("Usuario", key="ingreso_usuario")
-            clave = st.text_input("Contraseña", type="password", key="ingreso_clave")
+            usuario = st.text_input("Usuario", key="ingreso_usuario", disabled=pendiente)
+            clave = st.text_input("Contraseña", type="password", key="ingreso_clave", disabled=pendiente)
             entrar = st.form_submit_button(
-                "Entrar", type="primary", use_container_width=True
+                "Entrar", type="primary", use_container_width=True, disabled=pendiente
             )
-        if entrar:
+        if entrar and not pendiente:
             try:
-                identidad = auth.autenticar(usuario, clave)
+                identidad = auth.autenticar(usuario, clave, credencial=credencial)
             except auth.ErrorAcceso as exc:
                 st.error(str(exc))
             except Exception as exc:
@@ -96,6 +116,7 @@ def render_ingreso() -> None:
                 )
             else:
                 st.session_state[CLAVE_SESION] = identidad
+                st.session_state[CLAVE_REVISION] = credencial.revision
                 # La contraseña no debe quedar en memoria de sesión.
                 st.session_state.pop("ingreso_clave", None)
                 st.rerun()
@@ -123,6 +144,8 @@ def render_seguridad() -> None:
     """Panel de vigilancia: intentos de ingreso, alertas y cuentas."""
 
     identidad = usuario_actual()
+    if identidad is None:
+        return
     st.markdown(
         '<div class="surface-title">Seguridad y accesos</div>'
         '<div class="surface-subtitle">Quién entra, quién lo intenta y qué cuentas existen.</div>',
@@ -194,66 +217,9 @@ def render_seguridad() -> None:
         st.dataframe(tabla, width="stretch", hide_index=True)
 
     st.write("")
-    st.markdown("##### Cuentas de la aplicación")
-    try:
-        cuentas = auth.listar_usuarios()
-    except Exception as exc:
-        st.caption(f"No fue posible leer las cuentas ({type(exc).__name__}).")
-        return
-    st.dataframe(
-        pd.DataFrame([
-            {
-                "Usuario": c["usuario"],
-                "Nombre": c["nombre"],
-                "Rol": c["rol"],
-                "Estado": "Activa" if int(c["activo"]) else "Desactivada",
-                "Último ingreso": _fecha_visible(c["ultimo_ingreso"]),
-                "Creada": _fecha_visible(c["creado_en"]),
-            }
-            for c in cuentas
-        ]),
-        width="stretch",
-        hide_index=True,
-    )
-
-    if identidad is not None:
-        st.write("")
-        with st.expander("Cambiar mi contraseña"):
-            with st.form("cambiar_clave"):
-                actual = st.text_input("Contraseña actual", type="password")
-                nueva = st.text_input("Contraseña nueva", type="password")
-                repetida = st.text_input("Repite la contraseña nueva", type="password")
-                guardar = st.form_submit_button("Cambiar contraseña", type="primary")
-            if guardar:
-                if nueva != repetida:
-                    st.error("La contraseña nueva y su repetición no coinciden.")
-                else:
-                    try:
-                        auth.cambiar_clave(identidad.usuario, actual, nueva)
-                    except auth.ErrorAcceso as exc:
-                        st.error(str(exc))
-                    else:
-                        st.success("Contraseña cambiada.")
-
-        if identidad.es_admin:
-            with st.expander("Crear una cuenta nueva"):
-                with st.form("crear_cuenta"):
-                    nuevo_usuario = st.text_input("Usuario", placeholder="finanzas")
-                    nuevo_nombre = st.text_input("Nombre visible", placeholder="María Pérez")
-                    nuevo_rol = st.selectbox("Rol", auth.ROLES)
-                    nueva_clave = st.text_input("Contraseña", type="password")
-                    crear = st.form_submit_button("Crear cuenta", type="primary")
-                if crear:
-                    try:
-                        auth.crear_usuario(
-                            nuevo_usuario, nueva_clave,
-                            nombre=nuevo_nombre, rol=nuevo_rol,
-                        )
-                    except auth.ErrorAcceso as exc:
-                        st.error(str(exc))
-                    else:
-                        st.success(f"Cuenta creada. Entrégale la contraseña a {nuevo_nombre or nuevo_usuario}.")
-                        st.rerun()
+    st.markdown("##### Cuenta de acceso")
+    st.write(f"Usuario: {identidad.usuario}")
+    st.caption("El usuario y la contraseña se administran desde los Secrets de Streamlit.")
 
 
 __all__ = [

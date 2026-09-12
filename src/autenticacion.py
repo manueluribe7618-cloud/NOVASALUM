@@ -1,10 +1,15 @@
-"""Control de acceso de NOVASALUM: usuarios, contraseñas e intentos.
+"""Control de acceso de NOVASALUM: credenciales de Secrets e intentos.
+
+El ingreso web lee usuario y contraseña exclusivamente de los Secrets de
+Streamlit. La base conserva metadatos y vigilancia, sin copiar esa contraseña
+ni su hash. Las funciones de cuentas locales se mantienen para compatibilidad
+con herramientas anteriores y no habilitan el acceso a la interfaz.
 
 Decisiones de seguridad que sostienen este módulo, por si algún día hay que
 revisarlas:
 
-- Las contraseñas **nunca se guardan**. Se guarda el resultado de pasarlas por
-  ``scrypt``, que es una función lenta y que exige memoria a propósito: cada
+- Para verificar las contraseñas se usa ``scrypt`` (en memoria para Secrets;
+  persistido solo por las herramientas de cuentas heredadas): cada
   intento cuesta unos 30 ms y 16 MB. Probar millones de contraseñas deja de ser
   práctico, y ni siquiera quien tenga la base puede deshacer el resultado.
 - Cada contraseña lleva su propia sal aleatoria, así dos personas con la misma
@@ -24,14 +29,14 @@ Este módulo no importa Streamlit: se prueba entero sin levantar la interfaz.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import hashlib
 import hmac
 from pathlib import Path
 import re
 import secrets
-from typing import Any
+from typing import Any, Mapping
 
 from src.database import ErrorCartera, _lectura, _transaccion, _insertar, inicializar
 
@@ -72,6 +77,38 @@ class Usuario:
     @property
     def es_admin(self) -> bool:
         return self.rol == "admin"
+
+
+@dataclass(frozen=True)
+class CredencialConfigurada:
+    """Verificador de la cuenta de Secrets; no conserva la contraseña en claro."""
+
+    usuario: str
+    clave_hash: str = field(repr=False)
+    revision: str = field(repr=False)
+
+
+_CLAVE_REVISION = secrets.token_bytes(32)
+
+
+def credencial_desde_secretos(secretos: Mapping[str, Any]) -> CredencialConfigurada:
+    """La sección [acceso] es la única fuente de credenciales de la web."""
+
+    seccion = secretos.get("acceso")
+    if not isinstance(seccion, Mapping):
+        raise ErrorAcceso("Configura el usuario y la contraseña en los Secrets de Streamlit.")
+    usuario = seccion.get("usuario")
+    clave = seccion.get("contrasena")
+    if not isinstance(usuario, str) or not isinstance(clave, str) or not usuario.strip() or not clave:
+        raise ErrorAcceso("Completa usuario y contrasena en la sección [acceso] de los Secrets de Streamlit.")
+    if usuario.startswith("CAMBIA_") or clave.startswith("CAMBIA_"):
+        raise ErrorAcceso("Reemplaza los valores de ejemplo del acceso en los Secrets de Streamlit.")
+    normalizado = normalizar_usuario(usuario)
+    revisar_fortaleza(clave)
+    revision = hmac.new(
+        _CLAVE_REVISION, (normalizado + "\0" + clave).encode("utf-8"), hashlib.sha256,
+    ).hexdigest()
+    return CredencialConfigurada(normalizado, hash_clave(clave), revision)
 
 
 # --------------------------------------------------------------------------
@@ -176,7 +213,7 @@ def crear_usuario(
     rol: str = "admin",
     ruta: str | Path | None = None,
 ) -> int:
-    """Crea una cuenta. La contraseña se guarda cifrada, nunca en claro."""
+    """Crea una cuenta. Se guarda un hash de la contraseña, nunca el texto."""
 
     nombre_usuario = normalizar_usuario(usuario)
     revisar_fortaleza(clave)
@@ -297,6 +334,8 @@ def autenticar(
     usuario: str,
     clave: str,
     ruta: str | Path | None = None,
+    *,
+    credencial: CredencialConfigurada | None = None,
 ) -> Usuario:
     """Valida usuario y contraseña. Lanza ``ErrorAcceso`` si no procede.
 
@@ -324,6 +363,22 @@ def autenticar(
 
     inicializar(ruta)
     with _transaccion(ruta) as conexion:
+        if credencial is not None and nombre_usuario == credencial.usuario:
+            # Solo metadatos de intentos y auditoría. La contraseña y su hash
+            # configurado permanecen fuera de la base, administrados en Secrets.
+            marca = _ahora()
+            conexion.execute(
+                """
+                INSERT INTO usuarios (
+                    usuario, nombre, clave_hash, rol, activo, intentos_fallidos,
+                    creado_en, actualizado_en
+                ) VALUES (?, ?, 'gestionado_en_streamlit', 'admin', 1, 0, ?, ?)
+                ON CONFLICT (usuario) DO UPDATE SET
+                    clave_hash = 'gestionado_en_streamlit', nombre = excluded.nombre,
+                    rol = 'admin'
+                """,
+                (nombre_usuario, nombre_usuario, marca, marca),
+            )
         fila = conexion.execute(
             """
             SELECT id, usuario, nombre, clave_hash, rol, activo, intentos_fallidos,
@@ -333,6 +388,12 @@ def autenticar(
             (nombre_usuario,),
         ).fetchone()
         datos = dict(fila) if fila else None
+        if credencial is not None:
+            if nombre_usuario != credencial.usuario:
+                # Una cuenta antigua de la base no puede saltarse Secrets.
+                datos = None
+            elif datos is not None:
+                datos["clave_hash"] = credencial.clave_hash
 
         if datos is None:
             # Se gasta el mismo tiempo que con un usuario real.
@@ -510,8 +571,10 @@ __all__ = [
     "ROLES",
     "UMBRAL_ALERTA",
     "Usuario",
+    "CredencialConfigurada",
     "autenticar",
     "cambiar_clave",
+    "credencial_desde_secretos",
     "crear_usuario",
     "desbloquear",
     "hash_clave",
