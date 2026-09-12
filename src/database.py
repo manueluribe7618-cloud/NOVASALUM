@@ -257,6 +257,12 @@ def _esquema_sql(*, postgres: bool) -> str:
             "INTEGER PRIMARY KEY AUTOINCREMENT",
             "BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
         )
+        # El esquema public de Supabase se expone por su Data API. NOVASALUM
+        # usa Postgres directamente desde el servidor, con un rol privado que
+        # omite RLS; los roles de la API no necesitan acceder a estas tablas.
+        # Se ejecuta en la misma transacción que CREATE TABLE para evitar una
+        # ventana en que una tabla nueva quede visible desde la API.
+        esquema += _SEGURIDAD_PG
     return esquema
 
 
@@ -397,6 +403,33 @@ _ESQUEMA_BASE = """
                 ON intentos_ingreso(creado_en);
             CREATE INDEX IF NOT EXISTS idx_intentos_usuario
                 ON intentos_ingreso(usuario, creado_en);
+"""
+
+
+_SEGURIDAD_PG = """
+            ALTER TABLE public.empresas ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.clientes ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.facturas_manual ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.abonos_manual ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.aplicaciones_abono ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.revisiones_conciliacion ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.auditoria ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.usuarios ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.intentos_ingreso ENABLE ROW LEVEL SECURITY;
+
+            REVOKE ALL PRIVILEGES ON TABLE
+                public.empresas, public.clientes, public.facturas_manual,
+                public.abonos_manual, public.aplicaciones_abono,
+                public.revisiones_conciliacion, public.auditoria,
+                public.usuarios, public.intentos_ingreso
+            FROM anon, authenticated;
+
+            REVOKE ALL PRIVILEGES ON SEQUENCE
+                public.clientes_id_seq, public.facturas_manual_id_seq,
+                public.abonos_manual_id_seq, public.aplicaciones_abono_id_seq,
+                public.revisiones_conciliacion_id_seq, public.auditoria_id_seq,
+                public.usuarios_id_seq, public.intentos_ingreso_id_seq
+            FROM anon, authenticated;
 """
 
 

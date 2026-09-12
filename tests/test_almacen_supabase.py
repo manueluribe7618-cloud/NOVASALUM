@@ -68,6 +68,22 @@ class DialectoPostgresTests(unittest.TestCase):
         esquema = db._esquema_sql(postgres=False)
         self.assertIn("INTEGER PRIMARY KEY AUTOINCREMENT", esquema)
         self.assertNotIn("IDENTITY", esquema)
+        self.assertNotIn("ROW LEVEL SECURITY", esquema)
+
+    def test_tablas_y_secuencias_postgres_no_quedan_expuestas_a_la_api(self) -> None:
+        esquema = db._esquema_sql(postgres=True)
+        for tabla in (
+            "empresas", "clientes", "facturas_manual", "abonos_manual",
+            "aplicaciones_abono", "revisiones_conciliacion", "auditoria",
+            "usuarios", "intentos_ingreso",
+        ):
+            self.assertIn(
+                f"ALTER TABLE public.{tabla} ENABLE ROW LEVEL SECURITY",
+                esquema,
+            )
+        self.assertIn("REVOKE ALL PRIVILEGES ON TABLE", esquema)
+        self.assertIn("REVOKE ALL PRIVILEGES ON SEQUENCE", esquema)
+        self.assertEqual(esquema.count("FROM anon, authenticated"), 2)
 
     def test_los_marcadores_se_traducen_a_postgres(self) -> None:
         ejecutado: list[tuple[str, tuple]] = []

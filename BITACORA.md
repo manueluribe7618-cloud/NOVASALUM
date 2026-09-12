@@ -545,3 +545,20 @@ autorización de Finanzas o del dueño.
   para el despliegue conectado a GitHub. La contraseña real se configura en
   los Secrets de Streamlit Cloud; el archivo local no se publica. Se corrigió
   también el mensaje de la herramienta heredada para que no prometa acceso web.
+
+## 2026-09-12 — Protección de las tablas de Supabase
+
+- El panel de Supabase mostró nueve alertas críticas: las nueve tablas de
+  NOVASALUM estaban en `public`, sin RLS, y los roles `anon` y `authenticated`
+  tenían permiso de lectura. La contraseña de la interfaz no protege la Data
+  API de Supabase, así que era una exposición independiente del ingreso web.
+- Se añadió RLS a las nueve tablas y se retiran los permisos de tablas y
+  secuencias a ambos roles de la API. NOVASALUM sigue usando su conexión
+  privada directa a Postgres; se verificó que ese rol omite RLS.
+- La protección se ejecuta en la misma transacción que la creación del esquema
+  y queda repetible en cada arranque del servidor. No se cambian facturas,
+  abonos ni fórmulas contables.
+- Se ensayó la migración en una transacción revertida y después se aplicó al
+  proyecto de Supabase: 9/9 tablas con RLS, 0 con lectura para los roles de la
+  Data API, 0/8 secuencias con uso público y lectura privada de la aplicación
+  correcta. Validación local: 119 pruebas correctas y pyflakes limpio.
