@@ -36,7 +36,6 @@ from src.ui.components import (
     render_kpi_card,
     render_section,
     short_text,
-    status_badge,
 )
 
 
@@ -153,7 +152,10 @@ def _render_kpis(invoices: list[dict[str, Any]]) -> None:
         "total_abonos_cop": sum(int(row["abonos_cop"]) for row in invoices),
         "saldo_cartera_cop": sum(int(row["saldo_cop"]) for row in invoices),
         "facturas_pendientes": sum(int(row["saldo_cop"]) > 0 for row in invoices),
-        "facturas_vencidas": sum(row["estado"] == "VENCIDA" for row in invoices),
+        "dias_maximos_cartera": max(
+            (_days_in_portfolio(row) for row in invoices if int(row["saldo_cop"]) > 0),
+            default=0,
+        ),
     }
     columns = st.columns(3)
     with columns[0]:
@@ -172,9 +174,16 @@ def _render_kpis(invoices: list[dict[str, Any]]) -> None:
         render_kpi_card(
             "Saldo pendiente",
             format_currency(summary["saldo_cartera_cop"]),
-            f"{summary['facturas_vencidas']} factura(s) vencida(s)",
+            f"Hasta {summary['dias_maximos_cartera']} día(s) en cartera",
             highlighted=True,
         )
+
+
+def _days_in_portfolio(row: dict[str, Any], *, today: dt.date | None = None) -> int:
+    """Días transcurridos desde la emisión, sin depender del vencimiento."""
+
+    issued_on = dt.date.fromisoformat(str(row["fecha"])[:10])
+    return max(0, ((today or dt.date.today()) - issued_on).days)
 
 
 def _invoices_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -200,7 +209,7 @@ def _invoices_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
                     if int(row.get("descuento_cop", 0) or 0) else ""
                 ),
                 "Saldo": format_currency(row["saldo_cop"]),
-                "Estado": ESTADO_META[row["estado"]][0],
+                "Días en cartera": _days_in_portfolio(row),
             }
         )
     return pd.DataFrame(output)
@@ -1048,7 +1057,7 @@ def _render_quick_edit(
                 <div class="surface" style="margin-top:.25rem">
                   <div class="eyebrow">Factura seleccionada</div>
                   <div style="font-weight:800;font-size:1.1rem">{html.escape(invoice["factura"])}</div>
-                  <div style="margin:.6rem 0">{status_badge(invoice["estado"])}</div>
+                  <div style="margin:.6rem 0"><strong>{_days_in_portfolio(invoice)} días en cartera</strong></div>
                   <div style="font-size:.86rem;color:#64748b">{html.escape(invoice["cliente"])}</div>
                   <div style="margin-top:.65rem">{plates_html(invoice["placas"])}</div>
                   <div style="margin-top:.8rem;font-size:.86rem;color:#475569">{html.escape(invoice["descripcion"] or "Sin detalle")}</div>

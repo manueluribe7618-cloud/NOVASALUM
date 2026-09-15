@@ -24,8 +24,7 @@ from src.formato import fmt_cop
 
 
 # Estados contables que entrega ``src.cartera_siigo``, más el estado propio de
-# esta vista para la factura cuyo detalle no se alcanzó a leer. Las etiquetas
-# son cortas a propósito: la columna Estado mide 125 px en la grilla.
+# esta vista para la factura cuyo detalle no se alcanzó a leer.
 SIIGO_ESTADO_META: dict[str, str] = {
     "PAGADA": "Pagada",
     "PAGO_PARCIAL": "Pago parcial",
@@ -53,7 +52,7 @@ COLUMNAS_GENERAL = [
     "Abonos",
     "Descuento",
     "Saldo",
-    "Estado",
+    "Días en cartera",
 ]
 
 # Columnas del estado de cuenta por cliente, espejo del que ya se envía a los
@@ -136,6 +135,16 @@ def fecha_visible(valor: Any) -> str:
         return str(valor)
 
 
+def dias_en_cartera(valor: Any, *, hoy: dt.date | None = None) -> int | str:
+    """Días desde la emisión; una fecha ausente permanece explícitamente vacía."""
+
+    try:
+        fecha = dt.date.fromisoformat(str(valor)[:10])
+    except (TypeError, ValueError):
+        return "—"
+    return max(0, ((hoy or dt.date.today()) - fecha).days)
+
+
 def etiqueta_estado(fila: Mapping[str, Any]) -> str:
     """Traduce el estado contable de Siigo a la etiqueta visible de la tabla."""
 
@@ -216,7 +225,7 @@ def tabla_general(filas: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
             "Abonos": "",
             "Descuento": money_blanco(_sin_detalle(fila, "descuento_siigo")),
             "Saldo": money(_valor(fila, "saldo_siigo")),
-            "Estado": etiqueta_estado(fila),
+            "Días en cartera": dias_en_cartera(fila.get("fecha")),
         })
     return pd.DataFrame(salida, columns=COLUMNAS_GENERAL)
 

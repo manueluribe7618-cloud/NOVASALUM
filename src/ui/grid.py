@@ -114,6 +114,11 @@ def render_grid(
             "Estado", pinned="right", lockPinned=True, width=125, minWidth=125,
             cellRenderer=STATUS_RENDERER,
         )
+    if "Días en cartera" in table.columns:
+        builder.configure_column(
+            "Días en cartera", pinned="right", lockPinned=True, width=145, minWidth=145,
+            cellStyle={"textAlign": "right", "fontWeight": "700"},
+        )
     for name in COLUMNAS_DERECHA:
         if name in table.columns:
             builder.configure_column(name, cellStyle={"textAlign": "right"})
