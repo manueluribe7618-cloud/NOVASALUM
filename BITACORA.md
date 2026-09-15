@@ -14,7 +14,9 @@ autorización de Finanzas o del dueño.
   una factura o un abono con varios datos.
 - Cambio: se conserva en la sesión el estado de apertura de cada diálogo. Se
   cierra solo después de guardar correctamente el movimiento; la selección
-  desde el detalle de cliente usa el mismo mecanismo.
+  desde el detalle de cliente usa el mismo mecanismo. Al guardar o descartar
+  una factura se limpian sus controles, para que la siguiente no herede un
+  cliente, importe, fecha o impuesto del borrador anterior.
 - Archivos: `src/app_shell.py` y `src/views/manual.py`.
 - Impacto contable: ninguno. No cambia los valores, las fórmulas ni la
   aplicación FIFO; solo permite completar el formulario antes de guardarlo.

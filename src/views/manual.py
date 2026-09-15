@@ -69,6 +69,43 @@ function(params) {
 }
 """)
 
+_INVOICE_DRAFT_KEYS = (
+    "factura_empresa",
+    "factura_empresa_anterior",
+    "factura_prefijo",
+    "factura_numero",
+    "factura_fecha",
+    "factura_vencimiento",
+    "factura_cliente",
+    "factura_detalle",
+    "factura_placas",
+    "factura_subtotal",
+    "factura_descuento",
+    "factura_iva_modo",
+    "factura_iva_porcentaje",
+    "factura_iva_valor",
+    "factura_retefuente_modo",
+    "factura_retefuente_porcentaje",
+    "factura_retefuente_valor",
+    "factura_ica_modo",
+    "factura_ica_porcentaje",
+    "factura_ica_valor",
+)
+
+
+def _limpiar_borrador_factura() -> None:
+    """Retira un borrador para que la siguiente factura no herede campos."""
+
+    for key in _INVOICE_DRAFT_KEYS:
+        st.session_state.pop(key, None)
+
+
+def _cerrar_dialogo_factura() -> None:
+    """Descarta el formulario al cerrar el diálogo por cualquier vía."""
+
+    _limpiar_borrador_factura()
+    st.session_state["dialogo_factura_abierto"] = False
+
 
 @dataclass(frozen=True)
 class ManualFilters:
@@ -869,7 +906,7 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 st.error(str(exc))
             else:
                 st.success("Factura registrada.")
-                st.session_state["dialogo_factura_abierto"] = False
+                _cerrar_dialogo_factura()
                 st.rerun()
 
 
@@ -1095,7 +1132,7 @@ def render_manual_portfolio(
         st.session_state["dialogo_abono_abierto"] = True
 
 
-@st.dialog("Registrar nueva factura", width="large")
+@st.dialog("Registrar nueva factura", width="large", on_dismiss=_cerrar_dialogo_factura)
 def show_invoice_dialog(active_company: str) -> None:
     """Abre el registro de factura desde la cabecera, sin ocupar la tabla."""
 

@@ -11,7 +11,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from src import database as db
-from src.views.manual import _consume_invoice_edit_event
+from src.views.manual import _cerrar_dialogo_factura, _consume_invoice_edit_event
 
 
 class InvoiceFormTests(unittest.TestCase):
@@ -251,6 +251,23 @@ _render_quick_edit(db.listar_facturas(), use_expander=False, invoice_id={factura
             event["data"]["request_id"] = "factura-fuera-del-filtro"
             self.assertIsNone(_consume_invoice_edit_event(event, [{"id": 9000}]))
             self.assertIsNone(_consume_invoice_edit_event(None, invoices))
+
+    def test_cerrar_formulario_limpia_el_borrador_completo(self) -> None:
+        state = {
+            "dialogo_factura_abierto": True,
+            "factura_cliente": "Cliente anterior",
+            "factura_subtotal": "1.500.000",
+            "factura_iva_modo": "PORCENTAJE",
+            "factura_iva_porcentaje": 19.0,
+            "otro_control": "permanece",
+        }
+        with patch("src.views.manual.st.session_state", state):
+            _cerrar_dialogo_factura()
+        self.assertFalse(state["dialogo_factura_abierto"])
+        self.assertNotIn("factura_cliente", state)
+        self.assertNotIn("factura_subtotal", state)
+        self.assertNotIn("factura_iva_modo", state)
+        self.assertEqual(state["otro_control"], "permanece")
 
 
 if __name__ == "__main__":
