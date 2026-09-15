@@ -35,6 +35,43 @@ def _siigo_row_as_dict(
     return {key: (None if pd.isna(value) else value) for key, value in data.items()}
 
 
+def _entero_o_desconocido(valor: Any) -> int | None:
+    """Pesos enteros, o ``None`` cuando la fuente no entregó el dato.
+
+    La diferencia con ``as_integer`` es deliberada y aquí es la que importa:
+    allí un dato ausente vale cero, que en una comparación es una afirmación
+    falsa. Un cero dice «no hay IVA»; un ausente dice «no se sabe». Tratarlos
+    igual hacía que una factura sin dato en Siigo apareciera CUADRADA contra
+    una manual en cero, que es justo la mentira que esta aplicación evita en
+    todas las demás pantallas.
+    """
+
+    if valor is None:
+        return None
+    # pd.isna va primero: comparar pd.NA con "" lanza TypeError («boolean
+    # value of NA is ambiguous») y tumbaría la pantalla entera.
+    try:
+        if bool(pd.isna(valor)):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(round(float(valor)))
+    except (TypeError, ValueError):
+        return None
+
+
+# Conceptos que se comparan factura por factura: clave interna, campo de la
+# cartera manual y campo de la lectura de Siigo.
+CONCEPTOS_COMPARADOS = (
+    ("saldo", "saldo_cop", "saldo_siigo"),
+    ("iva", "iva_cop", "iva_siigo"),
+    ("retefuente", "retefuente_cop", "retefuente_siigo"),
+    ("ica", "ica_cop", "reteica_siigo"),
+    ("descuento", "descuento_cop", "descuento_siigo"),
+)
+
+
 def _build_reconciliation(
     manual_invoices: list[dict[str, Any]],
     siigo_invoices: pd.DataFrame,
@@ -56,36 +93,36 @@ def _build_reconciliation(
         official = siigo_by_invoice.get((company, invoice_key))
         invoice = (manual or official or {}).get("factura", invoice_key)
         customer = (manual or official or {}).get("cliente", "")
-        balance_difference = None
-        iva_difference = None
-        withholding_difference = None
-        ica_difference = None
+        differences: dict[str, int | None] = {
+            clave: None for clave, _, _ in CONCEPTOS_COMPARADOS
+        }
         if manual is None:
             status = "SOLO_SIIGO"
         elif official is None:
             status = "SOLO_MANUAL"
         else:
-            balance_difference = as_integer(manual["saldo_cop"]) - as_integer(
-                official.get("saldo_siigo")
-            )
-            iva_difference = as_integer(manual["iva_cop"]) - as_integer(
-                official.get("iva_siigo")
-            )
-            withholding_difference = as_integer(manual["retefuente_cop"]) - as_integer(
-                official.get("retefuente_siigo")
-            )
-            ica_difference = as_integer(manual["ica_cop"]) - as_integer(
-                official.get("reteica_siigo")
-            )
-            if abs(balance_difference) <= 1 and all(
-                abs(difference) <= 1
-                for difference in (iva_difference, withholding_difference, ica_difference)
-            ):
+            sin_dato: list[str] = []
+            for clave, campo_manual, campo_siigo in CONCEPTOS_COMPARADOS:
+                lado_siigo = _entero_o_desconocido(official.get(campo_siigo))
+                if lado_siigo is None:
+                    sin_dato.append(clave)
+                    continue
+                differences[clave] = as_integer(manual.get(campo_manual)) - lado_siigo
+            if sin_dato:
+                # Siigo no entregó al menos un concepto. No se puede afirmar
+                # que cuadre ni que descuadre: se dice que falta el dato.
+                status = "DATO_INCOMPLETO"
+            elif all(abs(differences[clave]) <= 1 for clave, _, _ in CONCEPTOS_COMPARADOS):
                 status = "CUADRADO"
-            elif abs(balance_difference) <= 1:
+            elif abs(differences["saldo"]) <= 1:
                 status = "DIFERENCIA_IMPUESTOS"
             else:
                 status = "DESCUADRE"
+        balance_difference = differences["saldo"]
+        iva_difference = differences["iva"]
+        withholding_difference = differences["retefuente"]
+        ica_difference = differences["ica"]
+        discount_difference = differences["descuento"]
         result.append(
             {
                 "empresa_codigo": company,
@@ -99,6 +136,7 @@ def _build_reconciliation(
                 "dif_iva": iva_difference,
                 "dif_retefuente": withholding_difference,
                 "dif_ica": ica_difference,
+                "dif_descuento": discount_difference,
             }
         )
     return result
@@ -140,6 +178,7 @@ def _render_comparison_side(
             format_currency(row.get("retefuente_siigo" if is_siigo else "retefuente_cop")),
         ),
         ("ICA", format_currency(row.get("reteica_siigo" if is_siigo else "ica_cop"))),
+        ("Descuento", format_currency(row.get("descuento_siigo" if is_siigo else "descuento_cop"))),
         ("Saldo", format_currency(row.get("saldo_siigo" if is_siigo else "saldo_cop"))),
     ]
     detail = row.get("descripcion_siigo", "") if is_siigo else row.get("descripcion", "")
@@ -223,6 +262,12 @@ def render_reconciliation(company: str) -> None:
             "Solo presentes en una fuente",
             highlighted=True,
         )
+    if counts["DATO_INCOMPLETO"]:
+        st.info(
+            f"{counts['DATO_INCOMPLETO']} factura(s) no se pueden comparar porque "
+            "Siigo no entregó alguno de sus conceptos. No están cuadradas ni "
+            "descuadradas: falta el dato para saberlo."
+        )
     st.write("")
     table = pd.DataFrame(
         [
@@ -241,6 +286,7 @@ def render_reconciliation(company: str) -> None:
                 "Dif. IVA": _format_difference(row["dif_iva"]),
                 "Dif. retefuente": _format_difference(row["dif_retefuente"]),
                 "Dif. ICA": _format_difference(row["dif_ica"]),
+                "Dif. descuento": _format_difference(row["dif_descuento"]),
             }
             for row in rows
         ]
