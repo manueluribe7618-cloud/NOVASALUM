@@ -49,6 +49,16 @@ class InvoiceFormTests(unittest.TestCase):
     def test_abono_inicial_es_opcional_y_no_cambia_el_guardado_normal(self) -> None:
         app = self.new_form()
         self.assertEqual(app.text_input(key="factura_abono_monto").value, "0")
+        self.assertEqual(
+            app.text_input(key="factura_abono_monto").label,
+            "Abono ya recibido (COP) · opcional",
+        )
+        input_keys = [widget.key for widget in app.text_input]
+        subtotal_position = input_keys.index("factura_subtotal")
+        self.assertEqual(
+            input_keys[subtotal_position:subtotal_position + 3],
+            ["factura_subtotal", "factura_descuento", "factura_abono_monto"],
+        )
         self.assertEqual(app.button(key="factura_guardar").label, "Guardar factura")
         self.assertFalse(
             any(button.key == "factura_guardar_con_abono" for button in app.button)

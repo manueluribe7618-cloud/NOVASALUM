@@ -7,6 +7,22 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-15 — Abono visible junto a los importes de la factura
+
+- Problema reportado: el cuadro de abono inicial estaba después de las tres
+  columnas de impuestos y de «Total a cobrar», fuera de la parte visible al
+  comenzar la digitación en el diálogo largo.
+- Cambio: «Subtotal», «Descuento» y «Abono ya recibido (COP) · opcional»
+  aparecen en una misma fila. Al escribir un abono aparecen su fecha y
+  referencia debajo; la vista previa del saldo permanece después del total.
+  El botón independiente «Registrar abono» y el guardado conjunto no cambian.
+- Archivos: `src/views/manual.py`, `tests/test_invoice_form.py`.
+- Impacto contable: ninguno. No cambian importes, fórmulas, abonos aplicados,
+  auditoría ni reglas de validación; es un ajuste de ubicación y rótulo.
+- Validación: prueba del formulario para el rótulo y la secuencia de los tres
+  campos, más la suite completa con Python 3.12 y Streamlit 1.60 sobre bases
+  temporales. No se escribió en Supabase.
+
 ## 2026-09-15 — Corrección de defectos encontrados en la revisión completa
 
 - Motivo: revisión de todo el proyecto solicitada por el dueño. Se corrigen los

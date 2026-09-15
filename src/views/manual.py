@@ -864,16 +864,44 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 key="factura_detalle",
             )
             plates = st.text_input("Placas", placeholder="SOQ766, TAW897", key="factura_placas")
-            subtotal_value = _render_subtotal_input("factura_subtotal")
+            amount_columns = st.columns(3)
+            with amount_columns[0]:
+                subtotal_value = _render_subtotal_input("factura_subtotal")
+            with amount_columns[1]:
+                descuento_value = _render_subtotal_input(
+                    "factura_descuento",
+                    label="Descuento (COP)",
+                    placeholder="0",
+                )
+            with amount_columns[2]:
+                initial_payment_value = _render_subtotal_input(
+                    "factura_abono_monto",
+                    label="Abono ya recibido (COP) · opcional",
+                    placeholder="0",
+                )
             subtotal = subtotal_value or 0
-            descuento_value = _render_subtotal_input(
-                "factura_descuento",
-                label="Descuento (COP)",
-                placeholder="0",
-            )
             descuento = descuento_value or 0
+            initial_payment = initial_payment_value or 0
             if descuento_value is not None and descuento > subtotal:
                 st.warning("El descuento no puede ser mayor que el subtotal.")
+            payment_date = None
+            payment_reference = ""
+            if initial_payment > 0:
+                st.caption("Este abono se aplicará únicamente a la factura que estás registrando.")
+                payment_columns = st.columns([1, 2])
+                with payment_columns[0]:
+                    payment_date = st.date_input(
+                        "Fecha del abono",
+                        value=None,
+                        key="factura_abono_fecha",
+                        help="Selecciona la fecha real del pago, especialmente si estás transcribiendo facturas anteriores.",
+                    )
+                with payment_columns[1]:
+                    payment_reference = st.text_input(
+                        "Referencia o comprobante (opcional)",
+                        placeholder="Recibo, transferencia o comprobante",
+                        key="factura_abono_referencia",
+                    )
             st.markdown("##### Impuestos y retenciones")
             st.caption(
                 f"Base: {format_currency(subtotal)}. Elige porcentaje, valor en pesos o no aplica para cada concepto."
@@ -900,48 +928,19 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                     f"Incluye un descuento de {format_currency(descuento)}. "
                     "Los impuestos se calculan sobre el subtotal, como en la hoja de Finanzas."
                 )
-            with st.container(border=True):
-                render_section(
-                    "Abono inicial de esta factura",
-                    "Opcional. Se aplicará únicamente a esta factura; el botón Registrar abono sigue disponible para otros pagos.",
-                )
-                initial_payment_value = _render_subtotal_input(
-                    "factura_abono_monto",
-                    label="Abono inicial (COP)",
-                    placeholder="0",
-                )
-                initial_payment = initial_payment_value or 0
-                payment_date = None
-                payment_reference = ""
-                if initial_payment > 0:
-                    payment_columns = st.columns([1, 2])
-                    with payment_columns[0]:
-                        payment_date = st.date_input(
-                            "Fecha del abono",
-                            value=None,
-                            key="factura_abono_fecha",
-                            help="Selecciona la fecha real del pago, especialmente si estás transcribiendo facturas anteriores.",
-                        )
-                    with payment_columns[1]:
-                        payment_reference = st.text_input(
-                            "Referencia o comprobante (opcional)",
-                            placeholder="Recibo, transferencia o comprobante",
-                            key="factura_abono_referencia",
-                        )
-                    if initial_payment > total:
-                        st.warning(
-                            "El abono inicial no puede superar el total de esta factura. "
-                            "Para un pago con excedente, usa Registrar abono."
-                        )
-                    else:
-                        st.caption(
-                            f"Se aplicarán {format_currency(initial_payment)} a esta factura. "
-                            f"Saldo después del abono: {format_currency(total - initial_payment)}."
-                        )
-                    if payment_date is None:
-                        st.caption("Selecciona la fecha del abono para guardar ambos movimientos.")
+            if initial_payment > 0:
+                if initial_payment > total:
+                    st.warning(
+                        "El abono inicial no puede superar el total de esta factura. "
+                        "Para un pago con excedente, usa Registrar abono."
+                    )
                 else:
-                    st.caption("Si esta factura aún no tiene pago, déjalo en cero.")
+                    st.caption(
+                        f"Se aplicarán {format_currency(initial_payment)} a esta factura. "
+                        f"Saldo después del abono: {format_currency(total - initial_payment)}."
+                    )
+                if payment_date is None:
+                    st.caption("Selecciona la fecha del abono para guardar ambos movimientos.")
 
             save_invoice = False
             save_with_payment = False
