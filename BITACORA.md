@@ -7,6 +7,34 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-15 — Abono inicial al registrar una factura manual
+
+- Solicitud del dueño: al transcribir la cartera, poder registrar en el mismo
+  paso el abono que ya tiene la factura, sin retirar el botón independiente
+  «Registrar abono».
+- Interfaz: el diálogo «Registrar factura» incluye un cuadro opcional de abono
+  inicial en pesos colombianos. Al indicar un importe muestra fecha real del
+  pago, referencia opcional, saldo resultante y la acción «Guardar factura y
+  abono». Sin abono mantiene «Guardar factura». El importe no puede superar el
+  total de esa factura; para pagos repartidos o con excedente se conserva el
+  flujo independiente. Al cerrar o guardar se limpian también los campos del
+  abono para que la siguiente factura no herede un pago.
+- Persistencia: una sola transacción crea factura, abono, aplicación directa a
+  esa factura y ambos registros de auditoría. Si falla cualquier paso, no
+  queda ninguno de los movimientos guardado. Las funciones previas de crear
+  facturas y registrar abonos continúan disponibles sin cambio de contrato.
+- Archivos: `src/views/manual.py`, `src/database.py`,
+  `tests/test_invoice_form.py` y `tests/test_initial_payment.py`.
+- Impacto contable: no se modifica la fórmula del total, la base de impuestos,
+  el redondeo ni FIFO. El nuevo pago aplicado reduce el saldo de la factura
+  por su importe; un abono inicial por el total la deja pagada.
+- Validación: 146 pruebas correctas con Python 3.12 y Streamlit 1.60; las de
+  interfaz y datos usan bases SQLite temporales e incluyen abono parcial y
+  total, descuento,
+  fecha histórica, límite por total y reversión completa ante errores o un
+  fallo simulado antes de confirmar la transacción. No se escribió en la
+  cartera real de Supabase.
+
 ## 2026-09-15 — Diálogos persistentes para registrar facturas y abonos
 
 - Problema: al editar un campo dentro de los diálogos de registro, Streamlit

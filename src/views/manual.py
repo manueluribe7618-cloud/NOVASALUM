@@ -81,6 +81,9 @@ _INVOICE_DRAFT_KEYS = (
     "factura_placas",
     "factura_subtotal",
     "factura_descuento",
+    "factura_abono_monto",
+    "factura_abono_fecha",
+    "factura_abono_referencia",
     "factura_iva_modo",
     "factura_iva_porcentaje",
     "factura_iva_valor",
@@ -874,38 +877,115 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                     f"Incluye un descuento de {format_currency(descuento)}. "
                     "Los impuestos se calculan sobre el subtotal, como en la hoja de Finanzas."
                 )
-            save = st.button(
-                "Guardar factura", type="primary", key="factura_guardar",
-                disabled=subtotal_value is None or descuento_value is None,
-            )
-        if save:
-            try:
-                db.crear_factura(
-                    {
-                        "empresa_codigo": company,
-                        "prefijo": prefix,
-                        "numero": number,
-                        "fecha": issue_date,
-                        "vencimiento": due_date,
-                        "cliente": customer,
-                        "descripcion": description,
-                        "placas": plates,
-                        "subtotal_cop": subtotal,
-                        "iva_cop": iva,
-                        "retefuente_cop": retefuente,
-                        "ica_cop": ica,
-                        "descuento_cop": descuento,
-                        "impuestos_config": {
-                            "iva": iva_config,
-                            "retefuente": retefuente_config,
-                            "ica": ica_config,
-                        },
-                    }
+            with st.container(border=True):
+                render_section(
+                    "Abono inicial de esta factura",
+                    "Opcional. Se aplicará únicamente a esta factura; el botón Registrar abono sigue disponible para otros pagos.",
                 )
+                initial_payment_value = _render_subtotal_input(
+                    "factura_abono_monto",
+                    label="Abono inicial (COP)",
+                    placeholder="0",
+                )
+                initial_payment = initial_payment_value or 0
+                payment_date = None
+                payment_reference = ""
+                if initial_payment > 0:
+                    payment_columns = st.columns([1, 2])
+                    with payment_columns[0]:
+                        payment_date = st.date_input(
+                            "Fecha del abono",
+                            value=None,
+                            key="factura_abono_fecha",
+                            help="Selecciona la fecha real del pago, especialmente si estás transcribiendo facturas anteriores.",
+                        )
+                    with payment_columns[1]:
+                        payment_reference = st.text_input(
+                            "Referencia o comprobante (opcional)",
+                            placeholder="Recibo, transferencia o comprobante",
+                            key="factura_abono_referencia",
+                        )
+                    if initial_payment > total:
+                        st.warning(
+                            "El abono inicial no puede superar el total de esta factura. "
+                            "Para un pago con excedente, usa Registrar abono."
+                        )
+                    else:
+                        st.caption(
+                            f"Se aplicarán {format_currency(initial_payment)} a esta factura. "
+                            f"Saldo después del abono: {format_currency(total - initial_payment)}."
+                        )
+                    if payment_date is None:
+                        st.caption("Selecciona la fecha del abono para guardar ambos movimientos.")
+                else:
+                    st.caption("Si esta factura aún no tiene pago, déjalo en cero.")
+
+            save_invoice = False
+            save_with_payment = False
+            if initial_payment > 0:
+                save_with_payment = st.button(
+                    "Guardar factura y abono",
+                    type="primary",
+                    key="factura_guardar_con_abono",
+                    disabled=(
+                        subtotal_value is None
+                        or descuento_value is None
+                        or initial_payment_value is None
+                        or initial_payment > total
+                        or payment_date is None
+                    ),
+                )
+            else:
+                save_invoice = st.button(
+                    "Guardar factura",
+                    type="primary",
+                    key="factura_guardar",
+                    disabled=(
+                        subtotal_value is None
+                        or descuento_value is None
+                        or initial_payment_value is None
+                    ),
+                )
+        if save_invoice or save_with_payment:
+            try:
+                invoice_data = {
+                    "empresa_codigo": company,
+                    "prefijo": prefix,
+                    "numero": number,
+                    "fecha": issue_date,
+                    "vencimiento": due_date,
+                    "cliente": customer,
+                    "descripcion": description,
+                    "placas": plates,
+                    "subtotal_cop": subtotal,
+                    "iva_cop": iva,
+                    "retefuente_cop": retefuente,
+                    "ica_cop": ica,
+                    "descuento_cop": descuento,
+                    "impuestos_config": {
+                        "iva": iva_config,
+                        "retefuente": retefuente_config,
+                        "ica": ica_config,
+                    },
+                }
+                if save_with_payment:
+                    db.crear_factura_con_abono(
+                        invoice_data,
+                        {
+                            "fecha": payment_date,
+                            "referencia": payment_reference,
+                            "monto_cop": initial_payment,
+                        },
+                    )
+                else:
+                    db.crear_factura(invoice_data)
             except db.ErrorCartera as exc:
                 st.error(str(exc))
             else:
-                st.success("Factura registrada.")
+                st.success(
+                    "Factura y abono registrados."
+                    if save_with_payment else "Factura registrada."
+                )
                 _cerrar_dialogo_factura()
                 st.rerun()
 
