@@ -17,7 +17,7 @@ from src import database as db
 from src.ui.layout import VISTA_MANUAL, active_company, render_page_header, render_sidebar
 from src.ui.styles import apply_global_styles
 from src.views.conciliacion import render_reconciliation
-from src.views.manual import render_manual_portfolio, show_payment_dialog
+from src.views.manual import render_manual_portfolio, show_invoice_dialog, show_payment_dialog
 from src.ui.ingreso import render_ingreso, render_seguridad, usuario_actual
 from src.views.siigo import render_siigo_portfolio
 
@@ -75,12 +75,17 @@ def run_application() -> None:
     st.write("")
 
     if view == VISTA_MANUAL:
+        # Los diálogos contienen controles que hacen rerun. Guardar su estado
+        # evita que se cierren después de editar el primer campo.
+        if actions.register_invoice:
+            st.session_state["dialogo_factura_abierto"] = True
         if actions.register_payment:
+            st.session_state["dialogo_abono_abierto"] = True
+        render_manual_portfolio(active_company("manual"), request_invoice=False)
+        if st.session_state.get("dialogo_factura_abierto"):
+            show_invoice_dialog(active_company("manual"))
+        if st.session_state.get("dialogo_abono_abierto"):
             show_payment_dialog()
-        render_manual_portfolio(
-            active_company("manual"),
-            request_invoice=actions.register_invoice,
-        )
     elif view == VISTA_SIIGO:
         render_siigo_portfolio(active_company("siigo"))
     elif view == VISTA_SEGURIDAD:

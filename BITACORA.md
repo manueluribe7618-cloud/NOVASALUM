@@ -7,6 +7,20 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-15 — Diálogos persistentes para registrar facturas y abonos
+
+- Problema: al editar un campo dentro de los diálogos de registro, Streamlit
+  volvía a ejecutar la página y cerraba el diálogo; no era posible completar
+  una factura o un abono con varios datos.
+- Cambio: se conserva en la sesión el estado de apertura de cada diálogo. Se
+  cierra solo después de guardar correctamente el movimiento; la selección
+  desde el detalle de cliente usa el mismo mecanismo.
+- Archivos: `src/app_shell.py` y `src/views/manual.py`.
+- Impacto contable: ninguno. No cambia los valores, las fórmulas ni la
+  aplicación FIFO; solo permite completar el formulario antes de guardarlo.
+- Validación: prueba manual del flujo de apertura y edición de campos en la
+  publicación conectada a Supabase.
+
 ## 2026-09-09 — Separación inicial de la aplicación
 
 - Motivo: convertir `app.py` en un punto de arranque mínimo y distribuir la

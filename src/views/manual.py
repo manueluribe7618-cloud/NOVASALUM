@@ -869,6 +869,7 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 st.error(str(exc))
             else:
                 st.success("Factura registrada.")
+                st.session_state["dialogo_factura_abierto"] = False
                 st.rerun()
 
 
@@ -1052,7 +1053,7 @@ def render_manual_portfolio(
     _render_kpis(_filter_period(invoices, selected_year, selected_month))
     st.write("")
     if request_invoice:
-        show_invoice_dialog(company)
+        st.session_state["dialogo_factura_abierto"] = True
     filters = _render_compact_filters(invoices, company)
     filtered = _filter_rows(invoices, filters)
 
@@ -1091,7 +1092,7 @@ def render_manual_portfolio(
     if edit_invoice_id is not None:
         show_edit_invoice_dialog(filtered, edit_invoice_id)
     if payment_from_detail:
-        show_payment_dialog()
+        st.session_state["dialogo_abono_abierto"] = True
 
 
 @st.dialog("Registrar nueva factura", width="large")
@@ -1258,6 +1259,7 @@ def show_payment_dialog() -> None:
             st.error(str(exc))
         else:
             st.success("Abono aplicado y registrado en auditoría.")
+            st.session_state["dialogo_abono_abierto"] = False
             st.rerun()
 
 
