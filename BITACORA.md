@@ -7,6 +7,95 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-15 — Corrección de defectos encontrados en la revisión completa
+
+- Motivo: revisión de todo el proyecto solicitada por el dueño. Se corrigen los
+  defectos hallados. Ningún cambio toca la fórmula del total, la base de los
+  impuestos, el redondeo ni el motor FIFO.
+
+- **Entorno de desarrollo inservible.** El Python del sistema en macOS (3.9
+  contra LibreSSL) no trae `hashlib.scrypt`, del que depende el control de
+  acceso: `src/autenticacion.py` reventaba al importarse y tres archivos de
+  prueba ni cargaban. Además había Streamlit 1.50 instalado y el proyecto
+  requiere 1.58 o superior. Se fija Python 3.12 en `.python-version`, se apunta
+  `.claude/launch.json` al intérprete del entorno virtual y se documenta el
+  arranque en `ARRANQUE.md`.
+
+- **Pérdida silenciosa de facturas en producción.** Si `SUPABASE_DB_URL` falta
+  o está mal escrita en los Secrets de Streamlit Cloud, la aplicación no
+  fallaba: guardaba en un archivo SQLite dentro del contenedor, que se borra en
+  cada reinicio. Ahora `app_shell.disco_efimero()` reconoce ese servidor (por el
+  montaje `/mount/src`, o por `NOVASALUM_EXIGE_NUBE=1` en cualquier otro
+  hospedaje) y la aplicación se detiene con el motivo y la solución, antes de
+  que se pueda digitar nada. Verificado en la aplicación real.
+
+- **TLS degradado sin avisar.** Si faltaba `certs/supabase-root-2021-ca.pem`,
+  `_url_con_tls` caía a `sslmode=require`, que cifra pero no comprueba la
+  identidad del servidor. Ahora levanta un error. Por ese canal viaja la
+  cartera completa.
+
+- **La conciliación declaraba «CUADRADO» sin haber comparado nada.** Un dato que
+  Siigo no entregó se convertía en cero, así que una factura manual en cero
+  contra un dato ausente salía cuadrada. Se añade el estado **«Falta dato de
+  Siigo»**: esas facturas no están cuadradas ni descuadradas, y se dice
+  cuántas son. Es la misma regla de honestidad que ya usaba la cartera Siigo.
+
+- **La conciliación no comparaba el descuento**, pese a existir en las dos
+  carteras desde el 2026-09-14. Ahora se compara y se muestra en la tabla y en
+  las dos fichas. Cambia el veredicto de la comparación: una factura cuyo
+  descuento difiera pasa a «Diferencia impuestos». No cambia ningún importe.
+
+- **Retenciones mal clasificadas por su nombre.** La condición aceptaba «ICA»
+  como subcadena, de modo que una retefuente llamada «servicios LOGISTICA» —en
+  una empresa de logística— se contabilizaba como ICA. Ahora se compara contra
+  palabras completas. Afecta solo al desglose informativo de la cartera Siigo.
+
+- **Los indicadores de la cartera Siigo ignoraban los filtros:** sumaban todas
+  las facturas encima de una tabla que mostraba solo las filtradas, dos cifras
+  distintas en la misma pantalla. Como estas vistas se envían como imagen, la
+  contradicción viajaba con ellas. Las tarjetas siguen arriba, pero ahora
+  cuentan lo visible.
+
+- **Dos diálogos seguían rompiéndose.** El arreglo del 2026-09-15 cubrió el de
+  registrar factura pero no los otros dos: «Editar factura» se cerraba al tocar
+  el primer campo (dependía del doble clic, que se consume una sola vez) y
+  «Registrar abono» se quedaba pegado al cerrarlo sin guardar. La factura en
+  edición pasa a vivir en la sesión y los tres diálogos declaran su cierre.
+  Cerrar sesión ahora también apaga esas banderas.
+
+- **El ingreso pagaba un scrypt completo en cada clic.** `usuario_actual()`
+  corre en cada rerun y solo necesita el usuario y la revisión, pero recalculaba
+  el hash: ~30 ms y 16 MB por interacción. Se memoriza la credencial vigente por
+  su revisión (la llave es un HMAC con clave aleatoria del proceso, no la
+  contraseña). Medido: 17,1 ms → 0,014 ms. Cambiar la contraseña en los Secrets
+  sigue invalidando la anterior de inmediato.
+
+- **Pruebas que iban a fallar solas.** Tres archivos fijaban fechas de 2026 con
+  vencimientos a 30 días; al pasar el calendario el estado derivado cambiaba a
+  VENCIDA y las aserciones caían sin que nadie tocara el código. Las fechas
+  quedan relativas al día real.
+
+- Archivos: `src/app_shell.py`, `src/database.py`, `src/autenticacion.py`,
+  `src/cartera_siigo.py`, `src/views/conciliacion.py`, `src/views/siigo.py`,
+  `src/views/manual.py`, `src/ui/components.py`, `src/ui/ingreso.py`,
+  `.claude/launch.json`, `.python-version`, `.gitignore`, `ARRANQUE.md` y los
+  archivos de prueba.
+
+- Impacto contable: ninguno sobre importes ya guardados. La fórmula, la base de
+  los impuestos, el redondeo y FIFO quedan idénticos. Los dos cambios que sí
+  alteran un veredicto son de comparación, no de dinero: el descuento entra en
+  la conciliación, y una factura sin dato de Siigo deja de contarse como
+  cuadrada. **Ambos quedan a confirmación del dueño.**
+
+- Validación: **200 pruebas en verde** (146 antes; 54 nuevas) con Python 3.12 y
+  Streamlit 1.60, y pyflakes limpio en todo el proyecto. Cinco archivos nuevos
+  cubren lo que no tenía ninguna prueba: la conciliación completa —que tenía 292
+  líneas y cero cobertura—, la clasificación fiscal de la cartera Siigo, los
+  diálogos, el estado VENCIDA con sus días de mora, las guardas que impiden
+  cruzar dinero entre clientes y empresas, y las dos guardas de almacenamiento.
+  La aplicación se arrancó y se comprobó que la guarda de disco efímero se
+  muestra. No se escribió en la cartera real de Supabase.
+
 ## 2026-09-15 — Abono inicial al registrar una factura manual
 
 - Solicitud del dueño: al transcribir la cartera, poder registrar en el mismo
