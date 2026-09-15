@@ -110,6 +110,29 @@ def _cerrar_dialogo_factura() -> None:
     st.session_state["dialogo_factura_abierto"] = False
 
 
+# La factura que se está editando vive en la sesión, no en el gesto de la
+# grilla. El doble clic se consume una sola vez, así que sin esta memoria el
+# primer campo que se tocaba provocaba un rerun, el gesto ya no estaba y el
+# diálogo se cerraba antes de poder corregir nada.
+CLAVE_FACTURA_EN_EDICION = "dialogo_editar_factura_id"
+
+
+def _cerrar_dialogo_edicion() -> None:
+    """Cierra la edición al guardar, al anular o al descartar el diálogo."""
+
+    st.session_state.pop(CLAVE_FACTURA_EN_EDICION, None)
+
+
+def _cerrar_dialogo_abono() -> None:
+    """Cierra el abono por cualquier vía, no solo cuando se guarda.
+
+    Sin esto la bandera quedaba encendida al cerrar con la X o con Esc y el
+    diálogo volvía a abrirse solo en el siguiente rerun.
+    """
+
+    st.session_state["dialogo_abono_abierto"] = False
+
+
 @dataclass(frozen=True)
 class ManualFilters:
     """Criterios de lectura de la tabla de cartera, sin modificar los datos."""
@@ -1142,6 +1165,7 @@ def _render_quick_edit(
                     st.error(str(exc))
                 else:
                     st.success("Cambios guardados.")
+                    _cerrar_dialogo_edicion()
                     st.rerun()
         with actions[1]:
             if st.button("Anular factura", width="stretch"):
@@ -1151,6 +1175,7 @@ def _render_quick_edit(
                     st.error(str(exc))
                 else:
                     st.success("Factura anulada. El registro continúa en auditoría.")
+                    _cerrar_dialogo_edicion()
                     st.rerun()
 
 
@@ -1174,7 +1199,6 @@ def render_manual_portfolio(
     filters = _render_compact_filters(invoices, company)
     filtered = _filter_rows(invoices, filters)
 
-    edit_invoice_id = None
     general_tab, customers_tab = st.tabs(["General", "Clientes y saldo pendiente"])
     with general_tab:
         render_section(
@@ -1187,7 +1211,9 @@ def render_manual_portfolio(
             event = _render_grid(
                 table, key="tabla_cartera_general", edit_on_double_click=True
             )
-            edit_invoice_id = _consume_invoice_edit_event(event, filtered)
+            gesto = _consume_invoice_edit_event(event, filtered)
+            if gesto is not None:
+                st.session_state[CLAVE_FACTURA_EN_EDICION] = gesto
             st.caption(
                 "Doble clic sobre una factura para editarla, o selecciona una celda y pulsa Enter. "
                 "Valores en pesos colombianos, sin centavos."
@@ -1206,8 +1232,9 @@ def render_manual_portfolio(
         _render_customer_debt(company, _filter_customers(invoices, filters.customers))
         st.write("")
         payment_from_detail = _render_customer_detail(invoices, filters)
+    edit_invoice_id = st.session_state.get(CLAVE_FACTURA_EN_EDICION)
     if edit_invoice_id is not None:
-        show_edit_invoice_dialog(filtered, edit_invoice_id)
+        show_edit_invoice_dialog(filtered, int(edit_invoice_id))
     if payment_from_detail:
         st.session_state["dialogo_abono_abierto"] = True
 
@@ -1219,14 +1246,14 @@ def show_invoice_dialog(active_company: str) -> None:
     _render_invoice_form(active_company, use_expander=False)
 
 
-@st.dialog("Editar factura", width="large")
+@st.dialog("Editar factura", width="large", on_dismiss=_cerrar_dialogo_edicion)
 def show_edit_invoice_dialog(invoices: list[dict[str, Any]], invoice_id: int) -> None:
     """Abre directamente la factura sobre la que se hizo doble clic."""
 
     _render_quick_edit(invoices, use_expander=False, invoice_id=invoice_id)
 
 
-@st.dialog("Registrar abono", width="large")
+@st.dialog("Registrar abono", width="large", on_dismiss=_cerrar_dialogo_abono)
 def show_payment_dialog() -> None:
     """Abre el flujo de registro y aplicación de un abono manual.
 
@@ -1376,7 +1403,7 @@ def show_payment_dialog() -> None:
             st.error(str(exc))
         else:
             st.success("Abono aplicado y registrado en auditoría.")
-            st.session_state["dialogo_abono_abierto"] = False
+            _cerrar_dialogo_abono()
             st.rerun()
 
 
