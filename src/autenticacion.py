@@ -90,6 +90,14 @@ class CredencialConfigurada:
 
 _CLAVE_REVISION = secrets.token_bytes(32)
 
+# La credencial vigente, memorizada por su revisión. ``usuario_actual`` se
+# llama en CADA rerun de Streamlit y solo necesita el usuario y la revisión;
+# sin esta memoria se pagaba un scrypt completo (~30 ms y 16 MB) en cada clic.
+# La llave del diccionario es el HMAC de revisión, no la contraseña, y se
+# calcula con una clave aleatoria de este proceso. Guarda una sola entrada:
+# cambiar la contraseña en los Secrets deja fuera a la anterior.
+_CREDENCIAL_VIGENTE: dict[str, "CredencialConfigurada"] = {}
+
 
 def credencial_desde_secretos(secretos: Mapping[str, Any]) -> CredencialConfigurada:
     """La sección [acceso] es la única fuente de credenciales de la web."""
@@ -108,7 +116,14 @@ def credencial_desde_secretos(secretos: Mapping[str, Any]) -> CredencialConfigur
     revision = hmac.new(
         _CLAVE_REVISION, (normalizado + "\0" + clave).encode("utf-8"), hashlib.sha256,
     ).hexdigest()
-    return CredencialConfigurada(normalizado, hash_clave(clave), revision)
+    memorizada = _CREDENCIAL_VIGENTE.get(revision)
+    if memorizada is not None:
+        return memorizada
+    credencial = CredencialConfigurada(normalizado, hash_clave(clave), revision)
+    # Se reemplaza el diccionario entero: la revisión anterior deja de valer.
+    _CREDENCIAL_VIGENTE.clear()
+    _CREDENCIAL_VIGENTE[revision] = credencial
+    return credencial
 
 
 # --------------------------------------------------------------------------
