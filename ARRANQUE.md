@@ -223,7 +223,10 @@ USD/mes) es agregar un archivo de configuración. No hay que reescribir nada.
    cliente del API nunca se ha ejecutado contra Siigo de verdad.** Con la
    primera lectura real, el panel de supervisión dirá cuántas facturas trae un
    mes y cuánto tarda; con esa cifra se decide si hace falta un tope.
-4. Definir entonces las reglas autorizadas para comparar ambas carteras. La
+4. Definir entonces las reglas autorizadas para comparar ambas carteras. **Dos
+   reglas ya están autorizadas por el dueño (2026-09-15):** si Siigo no entregó
+   un concepto, la factura sale «Falta dato de Siigo» y no «Cuadrado»; y el
+   descuento se compara, con «Diferencia impuestos» si no coincide. La
    conciliación ya existe, pero hay DOS motores de comparación distintos
    (`src/cartera_siigo.py:conciliar_cartera` y `src/views/conciliacion.py`);
    solo se usa el segundo. Hay que escoger uno antes de ampliarla.

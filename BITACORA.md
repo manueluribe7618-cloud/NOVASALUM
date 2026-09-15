@@ -7,6 +7,28 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-15 — Dueño confirma las dos reglas de conciliación
+
+- Decisión del dueño: aprueba los dos veredictos de comparación que la
+  revisión completa del mismo día dejó pendientes de su confirmación.
+  1. Cuando Siigo no entregó alguno de los conceptos comparados (saldo, IVA,
+     retefuente, ICA o descuento), la factura sale **«Falta dato de Siigo»**
+     y no «Cuadrado»: no se puede afirmar que cuadre ni que descuadre algo que
+     no se comparó.
+  2. El **descuento se compara** entre la cartera manual y la de Siigo; si no
+     coincide, la factura sale **«Diferencia impuestos»**.
+- Motivo: un «Cuadrado» que no comparó nada no sirve para supervisar la
+  cartera, y el descuento existe en las dos carteras desde el 2026-09-14.
+- Dónde vive: `src/views/conciliacion.py` (`CONCEPTOS_COMPARADOS` y
+  `_build_reconciliation`) y `src/ui/components.py` (`ESTADO_META`,
+  `DATO_INCOMPLETO` → «Falta dato de Siigo»). Cubierto por
+  `tests/test_conciliacion.py`.
+- Archivos de esta entrada: `BITACORA.md` y `ARRANQUE.md` (solo registro de
+  la autorización; no hay cambios de código).
+- Impacto contable: ninguno. Son veredictos de comparación; ningún importe,
+  fórmula ni abono cambia.
+- Validación: suite completa en verde, sin cambios de código.
+
 ## 2026-09-15 — Abono visible junto a los importes de la factura
 
 - Problema reportado: el cuadro de abono inicial estaba después de las tres
@@ -101,7 +123,7 @@ autorización de Finanzas o del dueño.
   los impuestos, el redondeo y FIFO quedan idénticos. Los dos cambios que sí
   alteran un veredicto son de comparación, no de dinero: el descuento entra en
   la conciliación, y una factura sin dato de Siigo deja de contarse como
-  cuadrada. **Ambos quedan a confirmación del dueño.**
+  cuadrada. **Ambos confirmados por el dueño el 2026-09-15.**
 
 - Validación: **200 pruebas en verde** (146 antes; 54 nuevas) con Python 3.12 y
   Streamlit 1.60, y pyflakes limpio en todo el proyecto. Cinco archivos nuevos
