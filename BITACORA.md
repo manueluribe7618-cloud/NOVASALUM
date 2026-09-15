@@ -7,6 +7,19 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-15 — Vista previa de abono sin movimiento ficticio
+
+- Problema: con el importe de abono en cero, la vista previa FIFO mostraba una
+  aplicación ficticia de $ 1. Aunque la operación no se guardaba, el resultado
+  inducía a error antes de escribir el monto real.
+- Cambio: la vista previa permanece vacía hasta que se digite un monto mayor a
+  cero. La distribución FIFO, las validaciones y el cálculo de saldos no se
+  modifican.
+- Archivo: `src/views/manual.py`.
+- Impacto contable: ninguno. No se alteran facturas, abonos existentes ni
+  fórmulas.
+- Validación: batería completa de pruebas: 132 correctas.
+
 ## 2026-09-15 — Diálogos persistentes para registrar facturas y abonos
 
 - Problema: al editar un campo dentro de los diálogos de registro, Streamlit

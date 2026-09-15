@@ -1217,8 +1217,13 @@ def show_payment_dialog() -> None:
     invoices = db.facturas_pendientes_cliente(company, int(customer["cliente_id"]))
     applications: list[dict[str, Any]]
     surplus = 0
-    if fifo:
-        applications, surplus = db.previsualizar_fifo(invoices, amount or 1)
+    if fifo and amount:
+        applications, surplus = db.previsualizar_fifo(invoices, amount)
+    elif fifo:
+        # Con monto cero no existe una aplicación que previsualizar. Antes se
+        # usaba ``amount or 1`` para forzar una fila, lo que mostraba un abono
+        # ficticio de $ 1 y podía confundir al registrar el pago.
+        applications = []
     else:
         base = pd.DataFrame(
             [
