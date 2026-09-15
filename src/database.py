@@ -128,15 +128,25 @@ def _url_con_tls(url: str) -> str:
     El certificado raíz de Supabase ya está en ``certs/`` porque su ausencia
     tumbó el proyecto anterior en producción. Se respeta cualquier ``sslmode``
     que la URL ya traiga configurado.
+
+    Si el certificado no está, se levanta un error en vez de conectar con un
+    TLS sin verificar: ``sslmode=require`` cifra el canal pero NO comprueba
+    que el servidor del otro lado sea Supabase, y por aquí viaja la cartera
+    completa. Degradar en silencio sería peor que no conectar.
     """
 
     if "sslmode=" in url:
         return url
     separador = "&" if "?" in url else "?"
     certificado = Path(__file__).resolve().parent.parent / "certs" / "supabase-root-2021-ca.pem"
-    if certificado.exists():
-        return f"{url}{separador}sslmode=verify-full&sslrootcert={certificado}"
-    return f"{url}{separador}sslmode=require"
+    if not certificado.exists():
+        raise ErrorCartera(
+            "Falta el certificado raíz de Supabase en "
+            f"{certificado}. Sin él la conexión no se puede verificar y la "
+            "cartera viajaría sin comprobar quién está al otro lado. "
+            "Restaura el archivo desde el repositorio y vuelve a intentarlo."
+        )
+    return f"{url}{separador}sslmode=verify-full&sslrootcert={certificado}"
 
 
 class _ConexionPG:
