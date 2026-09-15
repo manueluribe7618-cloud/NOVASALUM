@@ -197,6 +197,159 @@ class CarteraManualTests(unittest.TestCase):
                 self.ruta,
             )
 
+    def test_el_descuento_resta_del_total_pero_no_de_los_impuestos(self) -> None:
+        """Fórmula autorizada por el dueño: total = subtotal + IVA − ret − ICA − descuento.
+
+        Como en su hoja de Excel: la retención se calcula sobre el subtotal
+        bruto y el descuento solo baja el total pendiente.
+        """
+
+        factura = db.crear_factura(
+            {
+                "empresa_codigo": "NOVASA",
+                "prefijo": "FEBA",
+                "numero": "800",
+                "fecha": self.hoy,
+                "vencimiento": self.hoy + timedelta(days=30),
+                "cliente": "Cliente de prueba SAS",
+                "descripcion": "Con descuento",
+                "placas": "TAV906",
+                "subtotal_cop": 3_800_000,
+                "iva_cop": 0,
+                "retefuente_cop": 38_000,
+                "ica_cop": 0,
+                "descuento_cop": 1_400,
+            },
+            self.ruta,
+        )
+        fila = db.obtener_factura(factura, self.ruta)
+        self.assertEqual(fila["descuento_cop"], 1_400)
+        self.assertEqual(fila["total_cop"], 3_800_000 - 38_000 - 1_400)
+        self.assertEqual(fila["saldo_cop"], 3_760_600)
+
+    def test_sin_descuento_todo_sigue_igual_que_antes(self) -> None:
+        factura = self.crear_factura("801", self.hoy, 100_000)
+        fila = db.obtener_factura(factura, self.ruta)
+        self.assertEqual(fila["descuento_cop"], 0)
+        self.assertEqual(fila["total_cop"], 100_000)
+
+    def test_el_descuento_no_puede_superar_el_subtotal(self) -> None:
+        datos = {
+            "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": "802",
+            "fecha": self.hoy, "cliente": "Cliente de prueba SAS",
+            "descripcion": "x", "placas": "x",
+            "subtotal_cop": 100_000, "iva_cop": 0, "retefuente_cop": 0,
+            "ica_cop": 0, "descuento_cop": 100_001,
+        }
+        with self.assertRaises(db.ErrorCartera):
+            db.crear_factura(datos, self.ruta)
+
+    def test_el_descuento_negativo_se_rechaza(self) -> None:
+        datos = {
+            "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": "803",
+            "fecha": self.hoy, "cliente": "Cliente de prueba SAS",
+            "descripcion": "x", "placas": "x",
+            "subtotal_cop": 100_000, "iva_cop": 0, "retefuente_cop": 0,
+            "ica_cop": 0, "descuento_cop": -1,
+        }
+        with self.assertRaises(db.ErrorCartera):
+            db.crear_factura(datos, self.ruta)
+
+    def test_editar_puede_corregir_el_descuento(self) -> None:
+        factura = self.crear_factura("804", self.hoy, 100_000)
+        db.actualizar_campos_factura(
+            factura,
+            {
+                "descripcion": "Con descuento nuevo", "placas": "ABC123",
+                "subtotal_cop": 100_000, "iva_cop": 0, "retefuente_cop": 0,
+                "ica_cop": 0, "descuento_cop": 10_000,
+            },
+            self.ruta,
+        )
+        fila = db.obtener_factura(factura, self.ruta)
+        self.assertEqual(fila["descuento_cop"], 10_000)
+        self.assertEqual(fila["total_cop"], 90_000)
+
+    def test_editar_sin_enviar_descuento_conserva_el_guardado(self) -> None:
+        factura = db.crear_factura(
+            {
+                "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": "805",
+                "fecha": self.hoy, "cliente": "Cliente de prueba SAS",
+                "descripcion": "x", "placas": "x",
+                "subtotal_cop": 100_000, "iva_cop": 0, "retefuente_cop": 0,
+                "ica_cop": 0, "descuento_cop": 5_000,
+            },
+            self.ruta,
+        )
+        db.actualizar_campos_factura(
+            factura,
+            {
+                "descripcion": "Solo el detalle", "placas": "x",
+                "subtotal_cop": 100_000, "iva_cop": 0, "retefuente_cop": 0,
+                "ica_cop": 0,
+            },
+            self.ruta,
+        )
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["descuento_cop"], 5_000)
+
+    def test_el_descuento_no_puede_dejar_el_total_bajo_los_abonos(self) -> None:
+        factura = self.crear_factura("806", self.hoy, 100_000)
+        db.registrar_abono(
+            empresa_codigo="NOVASA", cliente_id=1, fecha=self.hoy,
+            referencia="TRX-806", monto_cop=95_000,
+            aplicaciones=[{"factura_id": factura, "monto_cop": 95_000}],
+            ruta=self.ruta,
+        )
+        with self.assertRaises(db.ErrorCartera):
+            db.actualizar_campos_factura(
+                factura,
+                {
+                    "descripcion": "x", "placas": "x",
+                    "subtotal_cop": 100_000, "iva_cop": 0, "retefuente_cop": 0,
+                    "ica_cop": 0, "descuento_cop": 10_000,
+                },
+                self.ruta,
+            )
+
+    def test_una_base_creada_antes_del_descuento_se_migra_sola(self) -> None:
+        """Las facturas guardadas antes de existir la columna siguen leyéndose."""
+
+        import sqlite3
+
+        vieja = Path(self.temporal.name) / "vieja.db"
+        # Se construye una base con la forma ANTERIOR del esquema, sin la
+        # columna, y con una factura ya guardada.
+        db.inicializar(vieja)
+        conexion = sqlite3.connect(vieja)
+        try:
+            conexion.execute("ALTER TABLE facturas_manual DROP COLUMN descuento_cop")
+            conexion.commit()
+        finally:
+            conexion.close()
+        factura = self.crear_factura_en("900", vieja)
+        fila = db.obtener_factura(factura, vieja)
+        self.assertEqual(fila["descuento_cop"], 0)
+        self.assertEqual(fila["total_cop"], 100_000)
+
+    def crear_factura_en(self, numero: str, ruta) -> int:
+        return db.crear_factura(
+            {
+                "empresa_codigo": "NOVASA",
+                "prefijo": "FEBA",
+                "numero": numero,
+                "fecha": self.hoy,
+                "vencimiento": self.hoy + timedelta(days=30),
+                "cliente": "Cliente de prueba SAS",
+                "descripcion": "Servicio de prueba",
+                "placas": "ABC123",
+                "subtotal_cop": 100_000,
+                "iva_cop": 0,
+                "retefuente_cop": 0,
+                "ica_cop": 0,
+            },
+            ruta,
+        )
+
     def test_factura_manual_no_registra_nit(self) -> None:
         factura = self.crear_factura("400", self.hoy)
 

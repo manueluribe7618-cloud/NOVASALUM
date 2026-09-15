@@ -51,6 +51,7 @@ COLUMNAS_GENERAL = [
     "Retefuente",
     "ICA",
     "Abonos",
+    "Descuento",
     "Saldo",
     "Estado",
 ]
@@ -67,6 +68,7 @@ COLUMNAS_ESTADO_CUENTA = [
     "Retención",
     "ICA",
     "Abono",
+    "Descuento",
     "Saldo pendiente",
 ]
 
@@ -212,6 +214,7 @@ def tabla_general(filas: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
             "Retefuente": money(_sin_detalle(fila, "retefuente_siigo")),
             "ICA": money(_sin_detalle(fila, "reteica_siigo")),
             "Abonos": "",
+            "Descuento": money_blanco(_sin_detalle(fila, "descuento_siigo")),
             "Saldo": money(_valor(fila, "saldo_siigo")),
             "Estado": etiqueta_estado(fila),
         })
@@ -233,6 +236,7 @@ def tabla_estado_cuenta(filas: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
             "Retención": money_blanco(_sin_detalle(fila, "retefuente_siigo")),
             "ICA": money_blanco(_sin_detalle(fila, "reteica_siigo")),
             "Abono": "",
+            "Descuento": money_blanco(_sin_detalle(fila, "descuento_siigo")),
             "Saldo pendiente": money(_valor(fila, "saldo_siigo")),
         })
     return pd.DataFrame(salida, columns=COLUMNAS_ESTADO_CUENTA)

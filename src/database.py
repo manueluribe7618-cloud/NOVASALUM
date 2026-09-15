@@ -266,6 +266,29 @@ def _esquema_sql(*, postgres: bool) -> str:
     return esquema
 
 
+def _asegurar_columna(
+    conexion: Any,
+    tabla: str,
+    columna: str,
+    definicion: str,
+    *,
+    postgres: bool,
+) -> None:
+    """Agrega una columna a una base que ya existía, sin tocar sus datos."""
+
+    if postgres:
+        conexion.execute(
+            f"ALTER TABLE {tabla} ADD COLUMN IF NOT EXISTS {columna} {definicion}"
+        )
+        return
+    existentes = {
+        str(dict(fila)["name"])
+        for fila in conexion.execute(f"PRAGMA table_info({tabla})").fetchall()
+    }
+    if columna not in existentes:
+        conexion.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
+
+
 def inicializar(ruta: str | Path | None = None) -> None:
     """Crea el esquema y las tres empresas si todavía no existen."""
 
@@ -277,6 +300,11 @@ def inicializar(ruta: str | Path | None = None) -> None:
         return
     with _transaccion(ruta) as conexion:
         conexion.executescript(_esquema_sql(postgres=en_postgres))
+        # Columnas agregadas después de la primera versión del esquema.
+        _asegurar_columna(
+            conexion, "facturas_manual", "descuento_cop",
+            "INTEGER NOT NULL DEFAULT 0", postgres=en_postgres,
+        )
         for codigo, datos in EMPRESAS.items():
             conexion.execute(
                 """
@@ -322,6 +350,7 @@ _ESQUEMA_BASE = """
                 iva_cop INTEGER NOT NULL DEFAULT 0 CHECK (iva_cop >= 0),
                 retefuente_cop INTEGER NOT NULL DEFAULT 0 CHECK (retefuente_cop >= 0),
                 ica_cop INTEGER NOT NULL DEFAULT 0 CHECK (ica_cop >= 0),
+                descuento_cop INTEGER NOT NULL DEFAULT 0 CHECK (descuento_cop >= 0),
                 anulada INTEGER NOT NULL DEFAULT 0 CHECK (anulada IN (0, 1)),
                 creada_en TEXT NOT NULL,
                 actualizada_en TEXT NOT NULL,
@@ -483,11 +512,23 @@ def _fecha(valor: Any, campo: str, *, obligatoria: bool = True) -> str | None:
 
 
 def _total_factura(fila: Mapping[str, Any]) -> int:
+    # Fórmula autorizada por el dueño (2026-09-14) al pedir la columna de
+    # descuento: total = subtotal + IVA − retefuente − ICA − descuento.
+    # El descuento es documental y NO cambia la base de los impuestos, igual
+    # que en la hoja de Finanzas: las retenciones se calculan sobre el
+    # subtotal bruto.
+    try:
+        # sqlite3.Row lanza IndexError y los diccionarios KeyError cuando la
+        # columna no existe (filas guardadas antes de que existiera el campo).
+        descuento = int(fila["descuento_cop"] or 0)
+    except (KeyError, IndexError):
+        descuento = 0
     return (
         int(fila["subtotal_cop"])
         + int(fila["iva_cop"])
         - int(fila["retefuente_cop"])
         - int(fila["ica_cop"])
+        - descuento
     )
 
 
@@ -558,7 +599,10 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
         "iva_cop": _pesos(datos.get("iva_cop", 0), "IVA"),
         "retefuente_cop": _pesos(datos.get("retefuente_cop", 0), "Retefuente"),
         "ica_cop": _pesos(datos.get("ica_cop", 0), "ICA"),
+        "descuento_cop": _pesos(datos.get("descuento_cop", 0), "Descuento"),
     }
+    if valores["descuento_cop"] > valores["subtotal_cop"]:
+        raise ErrorCartera("El descuento no puede ser mayor que el subtotal.")
     if _total_factura(valores) <= 0:
         raise ErrorCartera("El total de la factura debe ser mayor que cero.")
 
@@ -571,8 +615,8 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
                 INSERT INTO facturas_manual (
                     empresa_codigo, cliente_id, prefijo, numero, fecha, vencimiento,
                     descripcion, placas, subtotal_cop, iva_cop, retefuente_cop, ica_cop,
-                    creada_en, actualizada_en
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    descuento_cop, creada_en, actualizada_en
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     empresa,
@@ -587,6 +631,7 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
                     valores["iva_cop"],
                     valores["retefuente_cop"],
                     valores["ica_cop"],
+                    valores["descuento_cop"],
                     _ahora(),
                     _ahora(),
                 ),
@@ -667,7 +712,12 @@ def actualizar_campos_factura(
             "iva_cop": _pesos(datos.get("iva_cop"), "IVA"),
             "retefuente_cop": _pesos(datos.get("retefuente_cop"), "Retefuente"),
             "ica_cop": _pesos(datos.get("ica_cop"), "ICA"),
+            "descuento_cop": _pesos(
+                datos.get("descuento_cop", anterior["descuento_cop"]), "Descuento"
+            ),
         }
+        if valores["descuento_cop"] > valores["subtotal_cop"]:
+            raise ErrorCartera("El descuento no puede ser mayor que el subtotal.")
         total = _total_factura(valores)
         if total <= 0:
             raise ErrorCartera("El total de la factura debe ser mayor que cero.")
@@ -681,7 +731,8 @@ def actualizar_campos_factura(
                 UPDATE facturas_manual
                 SET numero = ?, fecha = ?, vencimiento = ?,
                     descripcion = ?, placas = ?, subtotal_cop = ?, iva_cop = ?,
-                    retefuente_cop = ?, ica_cop = ?, actualizada_en = ?
+                    retefuente_cop = ?, ica_cop = ?, descuento_cop = ?,
+                    actualizada_en = ?
                 WHERE id = ?
                 """,
                 (
@@ -694,6 +745,7 @@ def actualizar_campos_factura(
                     valores["iva_cop"],
                     valores["retefuente_cop"],
                     valores["ica_cop"],
+                    valores["descuento_cop"],
                     _ahora(),
                     int(factura_id),
                 ),
@@ -756,7 +808,7 @@ def _filas_facturas(
         SELECT
             f.id, f.empresa_codigo, f.prefijo, f.numero, f.fecha, f.vencimiento,
             f.descripcion, f.placas, f.subtotal_cop, f.iva_cop, f.retefuente_cop,
-            f.ica_cop, f.anulada, f.creada_en, f.actualizada_en,
+            f.ica_cop, f.descuento_cop, f.anulada, f.creada_en, f.actualizada_en,
             c.id AS cliente_id, c.nombre AS cliente, c.nit AS nit,
             COALESCE(SUM(a.monto_cop), 0) AS abonos_cop
         FROM facturas_manual f

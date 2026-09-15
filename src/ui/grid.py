@@ -73,6 +73,7 @@ COLUMNAS_DERECHA = (
     "Retefuente",
     "ICA",
     "Abonos",
+    "Descuento",
     "Saldo",
     "Sub valor factura",
     "Impuestos",

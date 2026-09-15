@@ -46,6 +46,68 @@ class InvoiceFormTests(unittest.TestCase):
         self.assertFalse(app.exception)
         return app
 
+    def test_el_descuento_se_captura_y_resta_del_total(self) -> None:
+        """El caso TAV906 de la hoja de Finanzas: 3.800.000 con 1.400 de descuento."""
+
+        app = self.new_form()
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("TAV-906")
+        app.text_input(key="factura_subtotal").input("3.800.000")
+        app.text_input(key="factura_descuento").input("1.400")
+        app.run()
+        self.assertFalse(app.exception)
+        # El capturador aplica los puntos de miles igual que el subtotal.
+        self.assertEqual(app.text_input(key="factura_descuento").value, "1.400")
+        # Total = 3.800.000 − 1.400 (impuestos en cero en este caso).
+        self.assertEqual(app.metric[0].value, "$ 3.798.600")
+        app.button(key="factura_guardar").click().run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        saved = next(row for row in db.listar_facturas() if row["numero"] == "TAV-906")
+        self.assertEqual(saved["descuento_cop"], 1_400)
+        self.assertEqual(saved["total_cop"], 3_798_600)
+        self.assertEqual(saved["saldo_cop"], 3_798_600)
+
+    def test_un_descuento_mayor_que_el_subtotal_no_se_guarda(self) -> None:
+        app = self.new_form()
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("MAL-1")
+        app.text_input(key="factura_subtotal").input("100.000")
+        app.text_input(key="factura_descuento").input("200.000")
+        app.run()
+        app.button(key="factura_guardar").click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.error)
+        self.assertFalse(
+            any(row["numero"] == "MAL-1" for row in db.listar_facturas())
+        )
+
+    def test_editar_conserva_y_permite_cambiar_el_descuento(self) -> None:
+        factura = db.crear_factura(
+            {
+                "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": "DESC-1",
+                "fecha": date.today(), "cliente": "Transportes de Prueba SAS",
+                "descripcion": "x", "placas": "x",
+                "subtotal_cop": 500_000, "iva_cop": 0, "retefuente_cop": 0,
+                "ica_cop": 0, "descuento_cop": 20_000,
+            }
+        )
+        app = AppTest.from_string(
+            f"""from src import database as db
+from src.views.manual import _render_quick_edit
+_render_quick_edit(db.listar_facturas(), use_expander=False, invoice_id={factura})
+"""
+        ).run()
+        self.assertFalse(app.exception)
+        clave = f"editar_factura_{factura}_descuento"
+        self.assertEqual(app.text_input(key=clave).value, "20.000")
+        app.text_input(key=clave).input("30.000").run()
+        next(button for button in app.button if button.label == "Guardar cambios").click().run()
+        self.assertFalse(app.exception)
+        editada = db.obtener_factura(factura)
+        self.assertEqual(editada["descuento_cop"], 30_000)
+        self.assertEqual(editada["total_cop"], 470_000)
+
     def test_porcentajes_recalculan_antes_de_guardar_y_persisten(self) -> None:
         app = self.new_form()
         app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")

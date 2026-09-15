@@ -105,16 +105,21 @@ class EstadoDeCuentaTests(unittest.TestCase):
             list(tabla.columns),
             ["_factura_id", "Factura", "Fecha", "Detalle del servicio", "Placas",
              "Sub valor factura", "Impuestos", "Retención", "ICA", "Abono",
-             "Saldo pendiente"],
+             "Descuento", "Saldo pendiente"],
         )
         fila = tabla.iloc[0]
         # Conceptos en cero quedan en blanco, como las celdas vacías del Excel.
         self.assertEqual(fila["Impuestos"], "")
         self.assertEqual(fila["ICA"], "")
         self.assertEqual(fila["Abono"], "")
+        self.assertEqual(fila["Descuento"], "")
         self.assertEqual(fila["Sub valor factura"], "$ 900.000")
         self.assertEqual(fila["Retención"], "$ 90.000")
         self.assertEqual(fila["Saldo pendiente"], "$ 810.000")
+
+    def test_el_descuento_se_muestra_cuando_existe(self) -> None:
+        tabla = _statement_table([_factura(descuento_cop=1_400)])
+        self.assertEqual(tabla.iloc[0]["Descuento"], "$ 1.400")
 
     def test_detalle_del_servicio_va_completo(self) -> None:
         detalle = "ALQUILER DE GRUA DE 70TON DE PLACA KPN553 " * 3

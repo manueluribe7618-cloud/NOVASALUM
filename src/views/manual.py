@@ -132,6 +132,10 @@ def _invoices_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
                 "Retefuente": format_currency(row["retefuente_cop"]),
                 "ICA": format_currency(row["ica_cop"]),
                 "Abonos": format_currency(row["abonos_cop"]),
+                "Descuento": (
+                    format_currency(row["descuento_cop"])
+                    if int(row.get("descuento_cop", 0) or 0) else ""
+                ),
                 "Saldo": format_currency(row["saldo_cop"]),
                 "Estado": ESTADO_META[row["estado"]][0],
             }
@@ -498,6 +502,7 @@ def _statement_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
                 "Retención": _monto(row["retefuente_cop"]),
                 "ICA": _monto(row["ica_cop"]),
                 "Abono": _monto(row["abonos_cop"]),
+                "Descuento": _monto(row.get("descuento_cop", 0) or 0),
                 "Saldo pendiente": format_currency(row["saldo_cop"]),
             }
         )
@@ -692,8 +697,14 @@ def _format_subtotal_input(key: str) -> None:
     st.session_state[key] = f"{amount:,}".replace(",", ".")
 
 
-def _render_subtotal_input(key: str, initial: int = 0) -> int | None:
-    """Muestra un subtotal colombiano y devuelve pesos enteros validados."""
+def _render_subtotal_input(
+    key: str,
+    initial: int = 0,
+    *,
+    label: str = "Subtotal (COP)",
+    placeholder: str = "1.500.000",
+) -> int | None:
+    """Muestra un importe colombiano y devuelve pesos enteros validados."""
 
     if key not in st.session_state:
         st.session_state[key] = f"{initial:,}".replace(",", ".")
@@ -701,9 +712,9 @@ def _render_subtotal_input(key: str, initial: int = 0) -> int | None:
         # Conserva un borrador que seguía abierto con el antiguo campo numérico.
         st.session_state[key] = f"{st.session_state[key]:,}".replace(",", ".")
     raw = st.text_input(
-        "Subtotal (COP)",
+        label,
         key=key,
-        placeholder="1.500.000",
+        placeholder=placeholder,
         help="Escribe con o sin puntos de miles. Al pulsar Enter o salir del campo se aplican los separadores automáticamente.",
         on_change=_format_subtotal_input,
         args=(key,),
@@ -792,6 +803,14 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
             plates = st.text_input("Placas", placeholder="SOQ766, TAW897", key="factura_placas")
             subtotal_value = _render_subtotal_input("factura_subtotal")
             subtotal = subtotal_value or 0
+            descuento_value = _render_subtotal_input(
+                "factura_descuento",
+                label="Descuento (COP)",
+                placeholder="0",
+            )
+            descuento = descuento_value or 0
+            if descuento_value is not None and descuento > subtotal:
+                st.warning("El descuento no puede ser mayor que el subtotal.")
             st.markdown("##### Impuestos y retenciones")
             st.caption(
                 f"Base: {format_currency(subtotal)}. Elige porcentaje, valor en pesos o no aplica para cada concepto."
@@ -806,11 +825,21 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 )
             with ica_column:
                 ica, ica_config = _render_tax_control("ica", int(subtotal))
-            total = int(subtotal) + int(iva) - int(retefuente) - int(ica)
-            st.metric("Total a cobrar", format_currency(total) if subtotal_value is not None else "—")
+            total = int(subtotal) + int(iva) - int(retefuente) - int(ica) - int(descuento)
+            st.metric(
+                "Total a cobrar",
+                format_currency(total)
+                if subtotal_value is not None and descuento_value is not None
+                else "—",
+            )
+            if descuento:
+                st.caption(
+                    f"Incluye un descuento de {format_currency(descuento)}. "
+                    "Los impuestos se calculan sobre el subtotal, como en la hoja de Finanzas."
+                )
             save = st.button(
                 "Guardar factura", type="primary", key="factura_guardar",
-                disabled=subtotal_value is None,
+                disabled=subtotal_value is None or descuento_value is None,
             )
         if save:
             try:
@@ -828,6 +857,7 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                         "iva_cop": iva,
                         "retefuente_cop": retefuente,
                         "ica_cop": ica,
+                        "descuento_cop": descuento,
                         "impuestos_config": {
                             "iva": iva_config,
                             "retefuente": retefuente_config,
@@ -934,8 +964,17 @@ def _render_quick_edit(
             subtotal_value = _render_subtotal_input(
                 f"editar_factura_{invoice['id']}_subtotal", int(invoice["subtotal_cop"])
             )
+            descuento_value = _render_subtotal_input(
+                f"editar_factura_{invoice['id']}_descuento",
+                int(invoice["descuento_cop"]),
+                label="Descuento (COP)",
+                placeholder="0",
+            )
         edited_row = edited.iloc[0].to_dict()
         subtotal = subtotal_value or 0
+        descuento = descuento_value or 0
+        if descuento_value is not None and descuento > subtotal:
+            st.warning("El descuento no puede ser mayor que el subtotal.")
         st.markdown("##### Impuestos y retenciones")
         st.caption(
             f"Base de cálculo: {format_currency(subtotal)}. Puedes conservar el importe o indicar un porcentaje."
@@ -951,11 +990,21 @@ def _render_quick_edit(
                     key_prefix=f"editar_factura_{invoice['id']}",
                     existing_amount=int(invoice[f"{component}_cop"]),
                 )
-        total = subtotal + amounts["iva"] - amounts["retefuente"] - amounts["ica"]
-        st.metric("Total a cobrar", format_currency(total) if subtotal_value is not None else "—")
+        total = (
+            subtotal + amounts["iva"] - amounts["retefuente"] - amounts["ica"] - descuento
+        )
+        st.metric(
+            "Total a cobrar",
+            format_currency(total)
+            if subtotal_value is not None and descuento_value is not None
+            else "—",
+        )
         actions = st.columns([1, 1])
         with actions[0]:
-            if st.button("Guardar cambios", type="primary", width="stretch", disabled=subtotal_value is None):
+            if st.button(
+                "Guardar cambios", type="primary", width="stretch",
+                disabled=subtotal_value is None or descuento_value is None,
+            ):
                 try:
                     db.actualizar_campos_factura(
                         int(invoice["id"]),
@@ -966,6 +1015,7 @@ def _render_quick_edit(
                             "descripcion": edited_row["Detalle del servicio"],
                             "placas": edited_row["Placas"],
                             "subtotal_cop": subtotal,
+                            "descuento_cop": descuento,
                             **{f"{component}_cop": amount for component, amount in amounts.items()},
                             "impuestos_config": configurations,
                         },

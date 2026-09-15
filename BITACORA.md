@@ -562,3 +562,32 @@ autorización de Finanzas o del dueño.
   proyecto de Supabase: 9/9 tablas con RLS, 0 con lectura para los roles de la
   Data API, 0/8 secuencias con uso público y lectura privada de la aplicación
   correcta. Validación local: 119 pruebas correctas y pyflakes limpio.
+
+## 2026-09-14 — Columna de descuento en el registro de facturas
+
+- Solicitud del dueño: agregar al registro de facturas la columna de
+  DESCUENTO que ya usa su hoja de Excel y la aplicación no tenía. Al pedirla
+  él mismo queda autorizado el cambio de fórmula que se le había señalado.
+- Fórmula nueva del total: subtotal + IVA − retefuente − ICA − **descuento**.
+  El descuento es documental y NO cambia la base de los impuestos: las
+  retenciones se siguen calculando sobre el subtotal bruto, exactamente como
+  en la hoja de Finanzas (verificado contra el caso real TAV906: subtotal
+  3.800.000, retefuente 38.000 = 1% del bruto, descuento 1.400).
+- Dónde aparece: campo «Descuento (COP)» en el registro y en la edición (con
+  el mismo capturador de puntos de miles del subtotal), columna «Descuento»
+  en el cuadro general y en el estado de cuenta de las dos carteras —en la
+  Siigo se llena con el descuento documental que ya entregaba el API
+  (descuento_siigo) y que hasta hoy no se mostraba. La celda queda vacía
+  cuando el descuento es cero, como en el Excel.
+- Protecciones: el descuento no puede ser negativo, no puede superar el
+  subtotal, el total sigue sin poder quedar en cero o negativo, y sigue sin
+  poder quedar por debajo de los abonos ya aplicados. Editar sin enviar el
+  campo conserva el descuento guardado.
+- Migración: las bases existentes reciben la columna sola al arrancar
+  (SQLite y Postgres), con 0 en todas las facturas anteriores: ningún total
+  histórico cambia. Ejecutada y verificada en el Supabase de producción.
+- Impacto contable: el autorizado. Las facturas ya guardadas no cambian
+  (descuento 0); solo las nuevas o editadas con descuento usan la fórmula.
+- Validación: 131 pruebas en verde (12 nuevas: fórmula, guardas, migración
+  de base vieja, captura por formulario con el caso TAV906, edición, y las
+  columnas espejo de las dos carteras). pyflakes limpio.
