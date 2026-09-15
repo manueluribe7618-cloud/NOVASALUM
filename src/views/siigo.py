@@ -561,10 +561,18 @@ def render_siigo_portfolio(company: str) -> None:
         _render_sin_lectura(reporte)
         return
 
-    _render_kpis(filas)
-    st.write("")
+    # Las tarjetas siguen arriba, como en la cartera manual, pero se pintan
+    # con las facturas que el filtro dejó visibles. Antes sumaban TODAS, así
+    # que el indicador y la tabla de abajo mostraban cifras distintas en la
+    # misma pantalla; y estas vistas se envían como imagen, de modo que la
+    # contradicción viajaba con ellas. El contenedor reserva el sitio para
+    # dibujarlas después de conocer el filtro, sin mover nada de lugar.
+    tarjetas = st.container()
     filtros = _render_filtros(filas)
     visibles = _aplicar_filtros(filas, filtros)
+    with tarjetas:
+        _render_kpis(visibles)
+        st.write("")
     vigentes = [f for f in visibles if es_vigente(f)]
     anuladas = [f for f in visibles if not es_vigente(f)]
 

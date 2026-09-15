@@ -10,6 +10,7 @@ Cada cartera elige su propia empresa (``filtro_empresa_manual``,
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import streamlit as st
 
@@ -24,6 +25,20 @@ from src.views.siigo import render_siigo_portfolio
 
 VISTA_SIIGO = "Espejo Siigo"
 VISTA_SEGURIDAD = "Seguridad"
+
+
+def disco_efimero() -> bool:
+    """¿El disco de este servidor se borra cuando la aplicación se reinicia?
+
+    Streamlit Community Cloud monta el repositorio en ``/mount/src``: ese
+    directorio solo existe allá y es la señal de que estamos en la nube. Para
+    cualquier otro hospedaje efímero (Render, Railway, un contenedor) basta con
+    definir ``NOVASALUM_EXIGE_NUBE=1`` en su configuración.
+    """
+
+    if os.getenv("NOVASALUM_EXIGE_NUBE", "").strip().lower() in {"1", "si", "sí", "true"}:
+        return True
+    return Path("/mount/src").is_dir()
 
 
 def run_application() -> None:
@@ -46,6 +61,26 @@ def run_application() -> None:
         url_nube = ""
     if url_nube:
         os.environ["SUPABASE_DB_URL"] = url_nube
+
+    # Sin esta guarda, olvidar o escribir mal SUPABASE_DB_URL en los Secrets no
+    # produce ningún error: la aplicación guarda en un archivo SQLite dentro
+    # del contenedor y ese archivo se borra en el siguiente reinicio. Las
+    # facturas se perderían en silencio, que es la única forma inaceptable de
+    # fallar en un programa de cartera. Se detiene antes de digitar nada.
+    if disco_efimero() and not db.url_supabase():
+        st.error(
+            "No hay base de datos en la nube configurada y este servidor borra "
+            "sus archivos cada vez que se reinicia. Si se digitaran facturas "
+            "ahora, se perderían."
+        )
+        st.info(
+            "Solución: en Streamlit Cloud abre Settings → Secrets y agrega la "
+            "llave SUPABASE_DB_URL con la URI del Transaction pooler de "
+            "Supabase (puerto 6543). Revisa que el nombre esté escrito "
+            "exactamente así, en mayúsculas. La aplicación arranca sola al "
+            "guardar los Secrets."
+        )
+        st.stop()
 
     try:
         db.inicializar()

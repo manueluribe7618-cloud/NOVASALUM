@@ -81,6 +81,9 @@ _INVOICE_DRAFT_KEYS = (
     "factura_placas",
     "factura_subtotal",
     "factura_descuento",
+    "factura_abono_monto",
+    "factura_abono_fecha",
+    "factura_abono_referencia",
     "factura_iva_modo",
     "factura_iva_porcentaje",
     "factura_iva_valor",
@@ -105,6 +108,29 @@ def _cerrar_dialogo_factura() -> None:
 
     _limpiar_borrador_factura()
     st.session_state["dialogo_factura_abierto"] = False
+
+
+# La factura que se está editando vive en la sesión, no en el gesto de la
+# grilla. El doble clic se consume una sola vez, así que sin esta memoria el
+# primer campo que se tocaba provocaba un rerun, el gesto ya no estaba y el
+# diálogo se cerraba antes de poder corregir nada.
+CLAVE_FACTURA_EN_EDICION = "dialogo_editar_factura_id"
+
+
+def _cerrar_dialogo_edicion() -> None:
+    """Cierra la edición al guardar, al anular o al descartar el diálogo."""
+
+    st.session_state.pop(CLAVE_FACTURA_EN_EDICION, None)
+
+
+def _cerrar_dialogo_abono() -> None:
+    """Cierra el abono por cualquier vía, no solo cuando se guarda.
+
+    Sin esto la bandera quedaba encendida al cerrar con la X o con Esc y el
+    diálogo volvía a abrirse solo en el siguiente rerun.
+    """
+
+    st.session_state["dialogo_abono_abierto"] = False
 
 
 @dataclass(frozen=True)
@@ -838,16 +864,44 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 key="factura_detalle",
             )
             plates = st.text_input("Placas", placeholder="SOQ766, TAW897", key="factura_placas")
-            subtotal_value = _render_subtotal_input("factura_subtotal")
+            amount_columns = st.columns(3)
+            with amount_columns[0]:
+                subtotal_value = _render_subtotal_input("factura_subtotal")
+            with amount_columns[1]:
+                descuento_value = _render_subtotal_input(
+                    "factura_descuento",
+                    label="Descuento (COP)",
+                    placeholder="0",
+                )
+            with amount_columns[2]:
+                initial_payment_value = _render_subtotal_input(
+                    "factura_abono_monto",
+                    label="Abono ya recibido (COP) · opcional",
+                    placeholder="0",
+                )
             subtotal = subtotal_value or 0
-            descuento_value = _render_subtotal_input(
-                "factura_descuento",
-                label="Descuento (COP)",
-                placeholder="0",
-            )
             descuento = descuento_value or 0
+            initial_payment = initial_payment_value or 0
             if descuento_value is not None and descuento > subtotal:
                 st.warning("El descuento no puede ser mayor que el subtotal.")
+            payment_date = None
+            payment_reference = ""
+            if initial_payment > 0:
+                st.caption("Este abono se aplicará únicamente a la factura que estás registrando.")
+                payment_columns = st.columns([1, 2])
+                with payment_columns[0]:
+                    payment_date = st.date_input(
+                        "Fecha del abono",
+                        value=None,
+                        key="factura_abono_fecha",
+                        help="Selecciona la fecha real del pago, especialmente si estás transcribiendo facturas anteriores.",
+                    )
+                with payment_columns[1]:
+                    payment_reference = st.text_input(
+                        "Referencia o comprobante (opcional)",
+                        placeholder="Recibo, transferencia o comprobante",
+                        key="factura_abono_referencia",
+                    )
             st.markdown("##### Impuestos y retenciones")
             st.caption(
                 f"Base: {format_currency(subtotal)}. Elige porcentaje, valor en pesos o no aplica para cada concepto."
@@ -874,38 +928,86 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                     f"Incluye un descuento de {format_currency(descuento)}. "
                     "Los impuestos se calculan sobre el subtotal, como en la hoja de Finanzas."
                 )
-            save = st.button(
-                "Guardar factura", type="primary", key="factura_guardar",
-                disabled=subtotal_value is None or descuento_value is None,
-            )
-        if save:
-            try:
-                db.crear_factura(
-                    {
-                        "empresa_codigo": company,
-                        "prefijo": prefix,
-                        "numero": number,
-                        "fecha": issue_date,
-                        "vencimiento": due_date,
-                        "cliente": customer,
-                        "descripcion": description,
-                        "placas": plates,
-                        "subtotal_cop": subtotal,
-                        "iva_cop": iva,
-                        "retefuente_cop": retefuente,
-                        "ica_cop": ica,
-                        "descuento_cop": descuento,
-                        "impuestos_config": {
-                            "iva": iva_config,
-                            "retefuente": retefuente_config,
-                            "ica": ica_config,
-                        },
-                    }
+            if initial_payment > 0:
+                if initial_payment > total:
+                    st.warning(
+                        "El abono inicial no puede superar el total de esta factura. "
+                        "Para un pago con excedente, usa Registrar abono."
+                    )
+                else:
+                    st.caption(
+                        f"Se aplicarán {format_currency(initial_payment)} a esta factura. "
+                        f"Saldo después del abono: {format_currency(total - initial_payment)}."
+                    )
+                if payment_date is None:
+                    st.caption("Selecciona la fecha del abono para guardar ambos movimientos.")
+
+            save_invoice = False
+            save_with_payment = False
+            if initial_payment > 0:
+                save_with_payment = st.button(
+                    "Guardar factura y abono",
+                    type="primary",
+                    key="factura_guardar_con_abono",
+                    disabled=(
+                        subtotal_value is None
+                        or descuento_value is None
+                        or initial_payment_value is None
+                        or initial_payment > total
+                        or payment_date is None
+                    ),
                 )
+            else:
+                save_invoice = st.button(
+                    "Guardar factura",
+                    type="primary",
+                    key="factura_guardar",
+                    disabled=(
+                        subtotal_value is None
+                        or descuento_value is None
+                        or initial_payment_value is None
+                    ),
+                )
+        if save_invoice or save_with_payment:
+            try:
+                invoice_data = {
+                    "empresa_codigo": company,
+                    "prefijo": prefix,
+                    "numero": number,
+                    "fecha": issue_date,
+                    "vencimiento": due_date,
+                    "cliente": customer,
+                    "descripcion": description,
+                    "placas": plates,
+                    "subtotal_cop": subtotal,
+                    "iva_cop": iva,
+                    "retefuente_cop": retefuente,
+                    "ica_cop": ica,
+                    "descuento_cop": descuento,
+                    "impuestos_config": {
+                        "iva": iva_config,
+                        "retefuente": retefuente_config,
+                        "ica": ica_config,
+                    },
+                }
+                if save_with_payment:
+                    db.crear_factura_con_abono(
+                        invoice_data,
+                        {
+                            "fecha": payment_date,
+                            "referencia": payment_reference,
+                            "monto_cop": initial_payment,
+                        },
+                    )
+                else:
+                    db.crear_factura(invoice_data)
             except db.ErrorCartera as exc:
                 st.error(str(exc))
             else:
-                st.success("Factura registrada.")
+                st.success(
+                    "Factura y abono registrados."
+                    if save_with_payment else "Factura registrada."
+                )
                 _cerrar_dialogo_factura()
                 st.rerun()
 
@@ -1062,6 +1164,7 @@ def _render_quick_edit(
                     st.error(str(exc))
                 else:
                     st.success("Cambios guardados.")
+                    _cerrar_dialogo_edicion()
                     st.rerun()
         with actions[1]:
             if st.button("Anular factura", width="stretch"):
@@ -1071,6 +1174,7 @@ def _render_quick_edit(
                     st.error(str(exc))
                 else:
                     st.success("Factura anulada. El registro continúa en auditoría.")
+                    _cerrar_dialogo_edicion()
                     st.rerun()
 
 
@@ -1094,7 +1198,6 @@ def render_manual_portfolio(
     filters = _render_compact_filters(invoices, company)
     filtered = _filter_rows(invoices, filters)
 
-    edit_invoice_id = None
     general_tab, customers_tab = st.tabs(["General", "Clientes y saldo pendiente"])
     with general_tab:
         render_section(
@@ -1107,7 +1210,9 @@ def render_manual_portfolio(
             event = _render_grid(
                 table, key="tabla_cartera_general", edit_on_double_click=True
             )
-            edit_invoice_id = _consume_invoice_edit_event(event, filtered)
+            gesto = _consume_invoice_edit_event(event, filtered)
+            if gesto is not None:
+                st.session_state[CLAVE_FACTURA_EN_EDICION] = gesto
             st.caption(
                 "Doble clic sobre una factura para editarla, o selecciona una celda y pulsa Enter. "
                 "Valores en pesos colombianos, sin centavos."
@@ -1126,8 +1231,9 @@ def render_manual_portfolio(
         _render_customer_debt(company, _filter_customers(invoices, filters.customers))
         st.write("")
         payment_from_detail = _render_customer_detail(invoices, filters)
+    edit_invoice_id = st.session_state.get(CLAVE_FACTURA_EN_EDICION)
     if edit_invoice_id is not None:
-        show_edit_invoice_dialog(filtered, edit_invoice_id)
+        show_edit_invoice_dialog(filtered, int(edit_invoice_id))
     if payment_from_detail:
         st.session_state["dialogo_abono_abierto"] = True
 
@@ -1139,14 +1245,14 @@ def show_invoice_dialog(active_company: str) -> None:
     _render_invoice_form(active_company, use_expander=False)
 
 
-@st.dialog("Editar factura", width="large")
+@st.dialog("Editar factura", width="large", on_dismiss=_cerrar_dialogo_edicion)
 def show_edit_invoice_dialog(invoices: list[dict[str, Any]], invoice_id: int) -> None:
     """Abre directamente la factura sobre la que se hizo doble clic."""
 
     _render_quick_edit(invoices, use_expander=False, invoice_id=invoice_id)
 
 
-@st.dialog("Registrar abono", width="large")
+@st.dialog("Registrar abono", width="large", on_dismiss=_cerrar_dialogo_abono)
 def show_payment_dialog() -> None:
     """Abre el flujo de registro y aplicación de un abono manual.
 
@@ -1301,7 +1407,7 @@ def show_payment_dialog() -> None:
             st.error(str(exc))
         else:
             st.success("Abono aplicado y registrado en auditoría.")
-            st.session_state["dialogo_abono_abierto"] = False
+            _cerrar_dialogo_abono()
             st.rerun()
 
 

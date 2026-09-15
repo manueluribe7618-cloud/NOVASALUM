@@ -106,11 +106,16 @@ pantalla nueva.
 
 ## Qué falta
 
+> Estado al 15 de septiembre de 2026: la persistencia, el control de acceso y
+> la cartera Siigo ya están construidos y en `BITACORA.md`. Lo que sigue en
+> esta sección es lo que queda abierto de verdad.
+
 ### 1. Consolidar la cartera manual. Es la prioridad actual.
 
 La interfaz ya existe y se organiza en módulos de estilos, componentes,
-navegación y vistas. Antes de ampliar sus funcionalidades hay que revisar cada
-flujo con Finanzas y definir una persistencia apta para despliegue.
+navegación y vistas. La persistencia ya está resuelta: almacenamiento dual
+SQLite/Supabase en `src/database.py`, verificado en vivo contra la nube. Lo que
+falta es revisar cada flujo con Finanzas y acordar los ajustes funcionales.
 
 ### 2. Las credenciales de Siigo, para la segunda cartera.
 
@@ -150,27 +155,24 @@ con *"self-signed certificate in certificate chain"*. Y además su CA intermedia
 defecto, así que también falla con *"CA cert does not include key usage
 extension"*.
 
-El certificado ya está copiado en `certs/supabase-root-2021-ca.pem`. La receta
-que funciona, sin relajar la seguridad más de lo necesario:
+El certificado ya está copiado en `certs/supabase-root-2021-ca.pem`.
 
-```python
-import ssl, certifi
-from pathlib import Path
+**Ya está resuelto, y no con un contexto `ssl` de Python.** La conexión la abre
+`psycopg`, así que el anclaje se hace en la propia cadena de conexión. Vive en
+`_url_con_tls` (`src/database.py`), y consiste en añadir a la URL:
 
-_CA_SUPABASE = Path(__file__).resolve().parent.parent / "certs" / "supabase-root-2021-ca.pem"
-
-def contexto_tls_supabase():
-    contexto = ssl.create_default_context(cafile=certifi.where())
-    contexto.load_verify_locations(cafile=str(_CA_SUPABASE))
-    contexto.minimum_version = ssl.TLSVersion.TLSv1_2
-    contexto.verify_mode = ssl.CERT_REQUIRED     # se mantiene estricto
-    contexto.check_hostname = True               # se mantiene estricto
-    contexto.verify_flags &= ~ssl.VERIFY_X509_STRICT   # lo único que se relaja
-    return contexto
+```
+sslmode=verify-full&sslrootcert=certs/supabase-root-2021-ca.pem
 ```
 
-Se relaja **solo** `VERIFY_X509_STRICT`. La verificación del certificado y del
-nombre del servidor siguen activas: esto transporta información financiera.
+`verify-full` comprueba el certificado **y** el nombre del servidor. Si la URL
+ya trae un `sslmode` elegido a propósito, se respeta y no se toca.
+
+Si el archivo del certificado no está, la función **levanta un error** en vez de
+caer a `sslmode=require`. La diferencia importa: `require` cifra el canal pero
+no comprueba quién está al otro lado, y por aquí viaja la cartera completa.
+Degradar en silencio sería peor que no conectar. Está cubierto por
+`tests/test_guardas_almacen.py`.
 
 ---
 
@@ -213,11 +215,35 @@ USD/mes) es agregar un archivo de configuración. No hay que reescribir nada.
 
 1. Revisar la cartera manual con Finanzas usando los datos de demostración y
    acordar los primeros ajustes funcionales.
-2. Definir una persistencia segura para la cartera manual antes de desplegarla
-   en Streamlit Cloud; SQLite local no basta para producción.
-3. Más adelante, configurar y probar Siigo con una consulta real de un mes por
-   empresa, manteniéndola independiente de la cartera manual.
-4. Definir entonces las reglas autorizadas para comparar ambas carteras.
+2. ~~Definir una persistencia segura~~ — **hecho.** Supabase conectado y
+   verificado en vivo; la aplicación se niega a arrancar en un servidor de
+   disco efímero sin base en la nube configurada.
+3. Configurar y probar Siigo con una consulta real de un mes por empresa,
+   manteniéndola independiente de la cartera manual. **Sigue pendiente: el
+   cliente del API nunca se ha ejecutado contra Siigo de verdad.** Con la
+   primera lectura real, el panel de supervisión dirá cuántas facturas trae un
+   mes y cuánto tarda; con esa cifra se decide si hace falta un tope.
+4. Definir entonces las reglas autorizadas para comparar ambas carteras. La
+   conciliación ya existe, pero hay DOS motores de comparación distintos
+   (`src/cartera_siigo.py:conciliar_cartera` y `src/views/conciliacion.py`);
+   solo se usa el segundo. Hay que escoger uno antes de ampliarla.
+
+### Cómo levantar el entorno
+
+El proyecto necesita **Python 3.12** (fijado en `.python-version`) y las
+versiones de `requirements.txt`. El Python del sistema en macOS no sirve: viene
+compilado contra LibreSSL y no trae `hashlib.scrypt`, del que depende el
+control de acceso.
+
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
+```
+
+Las pruebas y el arranque, siempre con ese intérprete:
+
+```bash
+.venv/bin/python -m unittest discover
+```
 
 ---
 

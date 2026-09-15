@@ -128,15 +128,25 @@ def _url_con_tls(url: str) -> str:
     El certificado raíz de Supabase ya está en ``certs/`` porque su ausencia
     tumbó el proyecto anterior en producción. Se respeta cualquier ``sslmode``
     que la URL ya traiga configurado.
+
+    Si el certificado no está, se levanta un error en vez de conectar con un
+    TLS sin verificar: ``sslmode=require`` cifra el canal pero NO comprueba
+    que el servidor del otro lado sea Supabase, y por aquí viaja la cartera
+    completa. Degradar en silencio sería peor que no conectar.
     """
 
     if "sslmode=" in url:
         return url
     separador = "&" if "?" in url else "?"
     certificado = Path(__file__).resolve().parent.parent / "certs" / "supabase-root-2021-ca.pem"
-    if certificado.exists():
-        return f"{url}{separador}sslmode=verify-full&sslrootcert={certificado}"
-    return f"{url}{separador}sslmode=require"
+    if not certificado.exists():
+        raise ErrorCartera(
+            "Falta el certificado raíz de Supabase en "
+            f"{certificado}. Sin él la conexión no se puede verificar y la "
+            "cartera viajaría sin comprobar quién está al otro lado. "
+            "Restaura el archivo desde el repositorio y vuelve a intentarlo."
+        )
+    return f"{url}{separador}sslmode=verify-full&sslrootcert={certificado}"
 
 
 class _ConexionPG:
@@ -583,10 +593,9 @@ def _cliente_id(
     )
 
 
-def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> int:
-    """Registra una factura manual y devuelve su identificador."""
+def _preparar_factura(datos: Mapping[str, Any]) -> dict[str, Any]:
+    """Valida una factura antes de abrir la transacción de escritura."""
 
-    inicializar(ruta)
     empresa = _empresa(datos.get("empresa_codigo"))
     prefijo = _texto(datos.get("prefijo"), "Prefijo", obligatorio=True).upper()
     numero = _texto(datos.get("numero"), "Número de factura", obligatorio=True).upper()
@@ -603,57 +612,140 @@ def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> i
     }
     if valores["descuento_cop"] > valores["subtotal_cop"]:
         raise ErrorCartera("El descuento no puede ser mayor que el subtotal.")
-    if _total_factura(valores) <= 0:
+    total = _total_factura(valores)
+    if total <= 0:
         raise ErrorCartera("El total de la factura debe ser mayor que cero.")
+    return {
+        "empresa": empresa,
+        "prefijo": prefijo,
+        "numero": numero,
+        "fecha": fecha,
+        "vencimiento": vencimiento,
+        "valores": valores,
+        "total_cop": total,
+    }
+
+def _crear_factura_en_transaccion(
+    conexion: Any,
+    datos: Mapping[str, Any],
+    preparada: Mapping[str, Any],
+) -> tuple[int, int]:
+    """Inserta factura y auditoría usando la transacción recibida."""
+
+    empresa = str(preparada["empresa"])
+    prefijo = str(preparada["prefijo"])
+    numero = str(preparada["numero"])
+    valores = preparada["valores"]
+    cliente_id = _cliente_id(conexion, empresa, datos.get("cliente"))
+    try:
+        factura_id = _insertar(
+            conexion,
+            """
+            INSERT INTO facturas_manual (
+                empresa_codigo, cliente_id, prefijo, numero, fecha, vencimiento,
+                descripcion, placas, subtotal_cop, iva_cop, retefuente_cop, ica_cop,
+                descuento_cop, creada_en, actualizada_en
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                empresa,
+                cliente_id,
+                prefijo,
+                numero,
+                preparada["fecha"],
+                preparada["vencimiento"],
+                _texto(datos.get("descripcion"), "Detalle del servicio"),
+                _texto(datos.get("placas"), "Placas"),
+                valores["subtotal_cop"],
+                valores["iva_cop"],
+                valores["retefuente_cop"],
+                valores["ica_cop"],
+                valores["descuento_cop"],
+                _ahora(),
+                _ahora(),
+            ),
+        )
+    except ERRORES_INTEGRIDAD as exc:
+        raise ErrorCartera(
+            f"La factura {prefijo}{numero} ya existe para {empresa}."
+        ) from exc
+    audit_detail: dict[str, Any] = {
+        "empresa": empresa,
+        "factura": f"{prefijo}{numero}",
+        **valores,
+    }
+    tax_configuration = datos.get("impuestos_config")
+    if isinstance(tax_configuration, Mapping):
+        audit_detail["impuestos_config"] = dict(tax_configuration)
+    _registrar(conexion, "factura_manual", factura_id, "CREADA", audit_detail)
+    return factura_id, cliente_id
+
+
+def crear_factura(datos: Mapping[str, Any], ruta: str | Path | None = None) -> int:
+    """Registra una factura manual y devuelve su identificador."""
+
+    inicializar(ruta)
+    preparada = _preparar_factura(datos)
+    with _transaccion(ruta) as conexion:
+        factura_id, _cliente = _crear_factura_en_transaccion(conexion, datos, preparada)
+        return factura_id
+
+
+def crear_factura_con_abono(
+    datos: Mapping[str, Any],
+    abono: Mapping[str, Any],
+    ruta: str | Path | None = None,
+) -> int:
+    """Crea la factura y aplica un abono inicial en una sola transacción.
+
+    Este atajo aplica el pago únicamente a la factura recién creada. No
+    reemplaza ``registrar_abono``: los pagos posteriores y saldos a favor
+    siguen usando aquel flujo. El resultado es el ID de la factura.
+    """
+
+    inicializar(ruta)
+    preparada = _preparar_factura(datos)
+    if not isinstance(abono, Mapping):
+        raise ErrorCartera("El abono inicial no tiene datos válidos.")
+    monto = _pesos(abono.get("monto_cop"), "Monto del abono", permite_cero=False)
+    if monto > int(preparada["total_cop"]):
+        raise ErrorCartera("El abono inicial no puede superar el total de la factura.")
+    fecha_pago = _fecha(abono.get("fecha"), "Fecha de pago")
+    referencia = _texto(abono.get("referencia"), "Referencia bancaria")
 
     with _transaccion(ruta) as conexion:
-        cliente_id = _cliente_id(conexion, empresa, datos.get("cliente"))
-        try:
-            factura_id = _insertar(
-                conexion,
-                """
-                INSERT INTO facturas_manual (
-                    empresa_codigo, cliente_id, prefijo, numero, fecha, vencimiento,
-                    descripcion, placas, subtotal_cop, iva_cop, retefuente_cop, ica_cop,
-                    descuento_cop, creada_en, actualizada_en
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    empresa,
-                    cliente_id,
-                    prefijo,
-                    numero,
-                    fecha,
-                    vencimiento,
-                    _texto(datos.get("descripcion"), "Detalle del servicio"),
-                    _texto(datos.get("placas"), "Placas"),
-                    valores["subtotal_cop"],
-                    valores["iva_cop"],
-                    valores["retefuente_cop"],
-                    valores["ica_cop"],
-                    valores["descuento_cop"],
-                    _ahora(),
-                    _ahora(),
-                ),
-            )
-        except ERRORES_INTEGRIDAD as exc:
-            raise ErrorCartera(
-                f"La factura {prefijo}{numero} ya existe para {empresa}."
-            ) from exc
-        audit_detail: dict[str, Any] = {
-            "empresa": empresa,
-            "factura": f"{prefijo}{numero}",
-            **valores,
-        }
-        tax_configuration = datos.get("impuestos_config")
-        if isinstance(tax_configuration, Mapping):
-            audit_detail["impuestos_config"] = dict(tax_configuration)
+        factura_id, cliente_id = _crear_factura_en_transaccion(conexion, datos, preparada)
+        abono_id = _insertar(
+            conexion,
+            """
+            INSERT INTO abonos_manual (
+                empresa_codigo, cliente_id, fecha, referencia, monto_cop,
+                saldo_a_favor_cop, creado_en
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (preparada["empresa"], cliente_id, fecha_pago, referencia, monto, 0, _ahora()),
+        )
+        conexion.execute(
+            """
+            INSERT INTO aplicaciones_abono (abono_id, factura_id, monto_cop, creado_en)
+            VALUES (?, ?, ?, ?)
+            """,
+            (abono_id, factura_id, monto, _ahora()),
+        )
         _registrar(
             conexion,
-            "factura_manual",
-            factura_id,
-            "CREADA",
-            audit_detail,
+            "abono_manual",
+            abono_id,
+            "REGISTRADO",
+            {
+                "empresa": preparada["empresa"],
+                "cliente_id": cliente_id,
+                "factura_id": factura_id,
+                "monto_cop": monto,
+                "aplicado_cop": monto,
+                "saldo_a_favor_cop": 0,
+                "referencia": referencia,
+            },
         )
         return factura_id
 
@@ -1273,6 +1365,7 @@ __all__ = [
     "cargar_datos_demostracion",
     "clientes_con_saldo",
     "crear_factura",
+    "crear_factura_con_abono",
     "facturas_pendientes_cliente",
     "guardar_revision_conciliacion",
     "hay_datos",

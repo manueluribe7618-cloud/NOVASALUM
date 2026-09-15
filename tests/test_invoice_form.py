@@ -46,6 +46,88 @@ class InvoiceFormTests(unittest.TestCase):
         self.assertFalse(app.exception)
         return app
 
+    def test_abono_inicial_es_opcional_y_no_cambia_el_guardado_normal(self) -> None:
+        app = self.new_form()
+        self.assertEqual(app.text_input(key="factura_abono_monto").value, "0")
+        self.assertEqual(
+            app.text_input(key="factura_abono_monto").label,
+            "Abono ya recibido (COP) · opcional",
+        )
+        input_keys = [widget.key for widget in app.text_input]
+        subtotal_position = input_keys.index("factura_subtotal")
+        self.assertEqual(
+            input_keys[subtotal_position:subtotal_position + 3],
+            ["factura_subtotal", "factura_descuento", "factura_abono_monto"],
+        )
+        self.assertEqual(app.button(key="factura_guardar").label, "Guardar factura")
+        self.assertFalse(
+            any(button.key == "factura_guardar_con_abono" for button in app.button)
+        )
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("SIN-ABONO")
+        app.text_input(key="factura_subtotal").input("100.000")
+        app.button(key="factura_guardar").click().run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        saved = next(row for row in db.listar_facturas() if row["numero"] == "SIN-ABONO")
+        self.assertEqual(saved["total_cop"], 100_000)
+        self.assertEqual(saved["saldo_cop"], 100_000)
+        self.assertEqual(db.listar_abonos(), [])
+
+    def test_abono_inicial_positivo_muestra_guardado_conjunto_y_exige_fecha(self) -> None:
+        app = self.new_form()
+        app.text_input(key="factura_subtotal").input("100.000")
+        app.text_input(key="factura_abono_monto").input("25.000").run()
+        self.assertFalse(app.exception)
+        self.assertEqual(
+            app.button(key="factura_guardar_con_abono").label,
+            "Guardar factura y abono",
+        )
+        self.assertFalse(any(button.key == "factura_guardar" for button in app.button))
+        self.assertIsNone(app.date_input(key="factura_abono_fecha").value)
+        self.assertTrue(app.button(key="factura_guardar_con_abono").disabled)
+        app.date_input(key="factura_abono_fecha").set_value(date.today()).run()
+        self.assertFalse(app.button(key="factura_guardar_con_abono").disabled)
+
+    def test_abono_inicial_mayor_al_total_no_puede_guardarse(self) -> None:
+        app = self.new_form()
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("EXCESO-ABONO")
+        app.text_input(key="factura_subtotal").input("100.000")
+        app.text_input(key="factura_abono_monto").input("150.000").run()
+        app.date_input(key="factura_abono_fecha").set_value(date.today()).run()
+        self.assertTrue(app.button(key="factura_guardar_con_abono").disabled)
+        self.assertEqual(len(db.listar_facturas()), 1)
+        self.assertEqual(db.listar_abonos(), [])
+
+    def test_guardar_factura_y_abono_registra_un_pago_aplicado_y_resta_saldo(self) -> None:
+        app = self.new_form()
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("CON-ABONO")
+        app.text_input(key="factura_subtotal").input("1.000.000")
+        app.text_input(key="factura_abono_monto").input("250.000").run()
+        app.date_input(key="factura_abono_fecha").set_value(date.today())
+        app.text_input(key="factura_abono_referencia").input("TRANSFERENCIA-123")
+        app.run()
+        self.assertFalse(app.button(key="factura_guardar_con_abono").disabled)
+        app.button(key="factura_guardar_con_abono").click().run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+
+        invoices = db.listar_facturas()
+        payments = db.listar_abonos()
+        self.assertEqual(len(invoices), 2)
+        self.assertEqual(len(payments), 1)
+        saved = next(row for row in invoices if row["numero"] == "CON-ABONO")
+        self.assertEqual(saved["total_cop"], 1_000_000)
+        self.assertEqual(saved["abonos_cop"], 250_000)
+        self.assertEqual(saved["saldo_cop"], 750_000)
+        self.assertEqual(payments[0]["monto_cop"], 250_000)
+        self.assertEqual(payments[0]["aplicado_cop"], 250_000)
+        self.assertEqual(payments[0]["saldo_a_favor_cop"], 0)
+        self.assertEqual(payments[0]["referencia"], "TRANSFERENCIA-123")
+        self.assertEqual(payments[0]["fecha"], date.today().isoformat())
+
     def test_el_descuento_se_captura_y_resta_del_total(self) -> None:
         """El caso TAV906 de la hoja de Finanzas: 3.800.000 con 1.400 de descuento."""
 
@@ -259,6 +341,9 @@ _render_quick_edit(db.listar_facturas(), use_expander=False, invoice_id={factura
             "factura_subtotal": "1.500.000",
             "factura_iva_modo": "PORCENTAJE",
             "factura_iva_porcentaje": 19.0,
+            "factura_abono_monto": "250.000",
+            "factura_abono_fecha": date.today(),
+            "factura_abono_referencia": "COMPROBANTE-1",
             "otro_control": "permanece",
         }
         with patch("src.views.manual.st.session_state", state):
@@ -267,6 +352,9 @@ _render_quick_edit(db.listar_facturas(), use_expander=False, invoice_id={factura
         self.assertNotIn("factura_cliente", state)
         self.assertNotIn("factura_subtotal", state)
         self.assertNotIn("factura_iva_modo", state)
+        self.assertNotIn("factura_abono_monto", state)
+        self.assertNotIn("factura_abono_fecha", state)
+        self.assertNotIn("factura_abono_referencia", state)
         self.assertEqual(state["otro_control"], "permanece")
 
 

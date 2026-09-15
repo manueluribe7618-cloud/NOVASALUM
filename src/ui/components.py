@@ -26,6 +26,7 @@ ESTADO_META = {
     "CUADRADO": ("Cuadrado", "verde"),
     "DIFERENCIA_IMPUESTOS": ("Diferencia impuestos", "amarillo"),
     "DESCUADRE": ("Descuadre", "rojo"),
+    "DATO_INCOMPLETO": ("Falta dato de Siigo", "gris"),
     "SOLO_MANUAL": ("Solo manual", "rojo"),
     "SOLO_SIIGO": ("Solo Siigo", "rojo"),
 }

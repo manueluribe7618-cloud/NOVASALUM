@@ -3,9 +3,33 @@
   "configurations": [
     {
       "name": "novasalum",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless", "true"],
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.headless",
+        "true"
+      ],
       "port": 8501
+    },
+    {
+      "name": "novasalum-simula-nube",
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": [
+        "NOVASALUM_EXIGE_NUBE=1",
+        ".venv/bin/python",
+        "-m",
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.headless",
+        "true",
+        "--server.port",
+        "8502"
+      ],
+      "port": 8502
     }
   ]
 }
