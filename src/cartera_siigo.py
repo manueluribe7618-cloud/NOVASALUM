@@ -329,6 +329,21 @@ def _clave_fiscal(valor: Any) -> str:
     )
 
 
+def _palabras_fiscales(valor: Any) -> set[str]:
+    """Palabras sueltas del nombre fiscal, sin tildes y en mayúsculas.
+
+    ``_clave_fiscal`` pega todo el nombre en una sola cadena, y buscar ahí una
+    subcadena confunde conceptos: «RETENCION EN LA FUENTE SERVICIOS LOGISTICA»
+    contiene «ICA» dentro de «LOGISTICA», y se contabilizaba como ICA. En una
+    empresa de logística eso no es una rareza teórica. Comparar contra palabras
+    completas evita esa clase entera de error.
+    """
+
+    texto = unicodedata.normalize("NFKD", str(valor or "").upper())
+    limpio = "".join(c for c in texto if not unicodedata.combining(c))
+    return {palabra for palabra in re.split(r"[^A-Z0-9]+", limpio) if palabra}
+
+
 def _impuestos_factura(factura: Mapping[str, Any]) -> dict[str, float]:
     """Resume impuestos informativos sin inferir valores ausentes en Siigo."""
 
@@ -347,10 +362,10 @@ def _impuestos_factura(factura: Mapping[str, Any]) -> dict[str, float]:
             if not isinstance(impuesto, Mapping):
                 continue
             valor = _numero(impuesto.get("value")) or 0.0
-            clave = _clave_fiscal(
-                f"{impuesto.get('type', '')} {impuesto.get('name', '')}"
-            )
-            if "IVA" in clave or "VAT" in clave:
+            nombre = f"{impuesto.get('type', '')} {impuesto.get('name', '')}"
+            clave = _clave_fiscal(nombre)
+            palabras = _palabras_fiscales(nombre)
+            if palabras & {"IVA", "VAT"} or clave.startswith("IVA"):
                 salida["iva_siigo"] += valor
             else:
                 salida["otros_impuestos_siigo"] += valor
@@ -358,14 +373,24 @@ def _impuestos_factura(factura: Mapping[str, Any]) -> dict[str, float]:
         if not isinstance(retencion, Mapping):
             continue
         valor = _numero(retencion.get("value")) or 0.0
-        clave = _clave_fiscal(
-            f"{retencion.get('type', '')} {retencion.get('name', '')}"
+        nombre = f"{retencion.get('type', '')} {retencion.get('name', '')}"
+        clave = _clave_fiscal(nombre)
+        palabras = _palabras_fiscales(nombre)
+        # De lo más específico a lo más general. ICA se reconoce por la palabra
+        # completa o por el nombre largo del impuesto de industria y comercio,
+        # nunca porque las letras aparezcan dentro de otra palabra.
+        es_ica = (
+            "RETEICA" in clave
+            or "RETENCIONICA" in clave
+            or "ICA" in palabras
+            or {"INDUSTRIA", "COMERCIO"} <= palabras
         )
-        if "RETEIVA" in clave:
+        es_fuente = "RETEFUENTE" in clave or "FUENTE" in palabras
+        if "RETEIVA" in clave or {"RETEIVA"} & palabras:
             salida["reteiva_siigo"] += valor
-        elif "RETEICA" in clave or ("RETE" in clave and "ICA" in clave):
+        elif es_ica:
             salida["reteica_siigo"] += valor
-        elif "RETEFUENTE" in clave or "FUENTE" in clave:
+        elif es_fuente:
             salida["retefuente_siigo"] += valor
         else:
             salida["otras_retenciones_siigo"] += valor
