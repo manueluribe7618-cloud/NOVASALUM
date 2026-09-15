@@ -16,7 +16,9 @@ class FacturaConAbonoInicialTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporal = tempfile.TemporaryDirectory()
         self.ruta = Path(self.temporal.name) / "cartera.db"
-        self.emision = date(2026, 9, 1)
+        # Relativa al día real: un vencimiento a 30 días desde una fecha fija
+        # se vuelve VENCIDA al pasar el calendario y tumba la prueba sola.
+        self.emision = date.today()
         db.inicializar(self.ruta)
 
     def tearDown(self) -> None:

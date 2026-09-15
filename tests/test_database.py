@@ -14,7 +14,10 @@ class CarteraManualTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporal = tempfile.TemporaryDirectory()
         self.ruta = Path(self.temporal.name) / "cartera.db"
-        self.hoy = date(2026, 9, 9)
+        # Anclado al día real: con una fecha fija, los vencimientos a 30 días
+        # quedaban en el pasado al llegar esa fecha y el estado derivado
+        # pasaba a VENCIDA, rompiendo pruebas que nadie había tocado.
+        self.hoy = date.today()
         db.inicializar(self.ruta)
 
     def tearDown(self) -> None:

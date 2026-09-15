@@ -7,7 +7,7 @@ que garantiza que toda la suite existente siga corriendo sin credenciales.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 import tempfile
 import unittest
@@ -148,8 +148,11 @@ class ComportamientoLocalIntactoTests(unittest.TestCase):
                     "empresa_codigo": "NOVASA",
                     "prefijo": "FEBA",
                     "numero": "9001",
-                    "fecha": date(2026, 9, 1),
-                    "vencimiento": date(2026, 10, 1),
+                    # Relativas al día real: con fechas fijas esta factura se
+                    # volvía VENCIDA al pasar el calendario y la aserción de
+                    # más abajo fallaba sin que nadie cambiara una línea.
+                    "fecha": date.today(),
+                    "vencimiento": date.today() + timedelta(days=30),
                     "cliente": "Cliente Supabase SAS",
                     "descripcion": "Prueba de almacenamiento",
                     "placas": "ABC123",
@@ -163,7 +166,7 @@ class ComportamientoLocalIntactoTests(unittest.TestCase):
             db.registrar_abono(
                 empresa_codigo="NOVASA",
                 cliente_id=1,
-                fecha=date(2026, 9, 10),
+                fecha=date.today(),
                 referencia="TRX-1",
                 monto_cop=500_000,
                 aplicaciones=[{"factura_id": factura_id, "monto_cop": 500_000}],
