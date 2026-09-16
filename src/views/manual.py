@@ -68,6 +68,50 @@ function(params) {
 }
 """)
 
+# Clic sencillo (o Enter) sobre cualquier celda de la fila del cliente. Cada
+# gesto lleva su propio identificador para consumirse una sola vez: el evento
+# de la grilla sobrevive a los reruns y, sin esto, el clic viejo pisaría al
+# buscador cada vez que la página se reejecuta.
+REQUEST_CUSTOMER_DETAIL = JsCode("""
+function(params) {
+    if (params.type === "cellKeyDown" && params.event.key !== "Enter") return;
+    if (!params.data || !params.data.Cliente) return;
+    params.api.dispatchEvent({
+        type: "customerDetailRequested",
+        data: {
+            cliente: params.data.Cliente,
+            request_id: crypto.randomUUID()
+        }
+    });
+}
+""")
+
+# Anchos fijos de la tabla de clientes, pedidos por el dueño: los tres datos
+# tienen su ancho cerrado y la razón social se queda con el resto del espacio,
+# para que siempre se lea completa. Nada se puede arrastrar.
+COLUMNAS_CLIENTES = {
+    "Cliente": {
+        "flex": 1,
+        "minWidth": 300,
+        "resizable": False,
+        "cellStyle": {"cursor": "pointer", "fontWeight": "600"},
+    },
+    "Saldo pendiente": {
+        "width": 190, "minWidth": 190, "maxWidth": 190, "resizable": False,
+    },
+    "Facturas con saldo": {
+        "width": 215, "minWidth": 215, "maxWidth": 215, "resizable": False,
+    },
+    "Empresas": {
+        "width": 230, "minWidth": 230, "maxWidth": 230, "resizable": False,
+    },
+}
+
+# El clic pedido desde la tabla de clientes viaja por la sesión hasta el
+# buscador del detalle, que lo resuelve contra sus propias opciones.
+CLAVE_DETALLE_SOLICITADO = "detalle_cliente_solicitado"
+
+
 _INVOICE_DRAFT_KEYS = (
     "factura_empresa",
     "factura_empresa_anterior",
@@ -216,7 +260,12 @@ def _invoices_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def _render_grid(
-    table: pd.DataFrame, *, key: str, edit_on_double_click: bool = False
+    table: pd.DataFrame,
+    *,
+    key: str,
+    edit_on_double_click: bool = False,
+    open_customer_on_click: bool = False,
+    column_config: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Muestra la tabla compartida; el doble clic para editar es solo manual."""
 
@@ -225,6 +274,9 @@ def _render_grid(
         key=key,
         edit_on_double_click=edit_on_double_click,
         on_row_event=REQUEST_INVOICE_EDIT if edit_on_double_click else None,
+        on_cell_click=REQUEST_CUSTOMER_DETAIL if open_customer_on_click else None,
+        click_event_name="customerDetailRequested" if open_customer_on_click else None,
+        column_config=column_config,
     )
 
 
@@ -252,6 +304,26 @@ def _consume_invoice_edit_event(
         if key.startswith(f"editar_factura_{invoice_id}_") or key == f"editor_factura_{invoice_id}":
             del st.session_state[key]
     return invoice_id
+
+
+def _consume_customer_click_event(event: dict[str, Any] | None) -> str | None:
+    """Consume cada clic sobre un cliente una sola vez.
+
+    Mismo mecanismo que la edición de facturas: el evento de la grilla se
+    repite en cada rerun, así que solo el identificador nuevo cuenta. Sin
+    esto, elegir otro cliente en el buscador sería imposible: el clic viejo
+    lo devolvería a la selección anterior en el siguiente rerun.
+    """
+
+    if not event or event.get("type") != "customerDetailRequested":
+        return None
+    data = event.get("data") or {}
+    request_id = data.get("request_id")
+    if not request_id or request_id == st.session_state.get("ultimo_detalle_grilla"):
+        return None
+    st.session_state["ultimo_detalle_grilla"] = request_id
+    name = str(data.get("cliente") or "").strip()
+    return name or None
 
 
 def _customer_options(
@@ -531,8 +603,13 @@ def _company_scope(company: str) -> str:
     return "todas las empresas" if company == TODAS else company_name(company)
 
 
-def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> None:
-    """Muestra una segunda tabla con el saldo que debe cada cliente."""
+def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> str | None:
+    """Muestra una segunda tabla con el saldo que debe cada cliente.
+
+    Devuelve la razón social si se hizo clic sobre un cliente, para abrir su
+    detalle sin pasar por el buscador. El buscador sigue funcionando igual:
+    son dos caminos hacia el mismo detalle.
+    """
 
     table = _customer_debt_table(invoices)
     render_section(
@@ -546,8 +623,15 @@ def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> None:
             'Elige otro cliente o registra una factura para comenzar.</div>',
             unsafe_allow_html=True,
         )
-    else:
-        _render_grid(table.drop(columns="_saldo"), key="tabla_clientes_manual")
+        return None
+    event = _render_grid(
+        table.drop(columns="_saldo"),
+        key="tabla_clientes_manual",
+        open_customer_on_click=True,
+        column_config=COLUMNAS_CLIENTES,
+    )
+    st.caption("Clic sobre un cliente para abrir su detalle, aquí abajo.")
+    return _consume_customer_click_event(event)
 
 
 def _statement_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -618,6 +702,17 @@ def _render_customer_detail(
     labels = list(options)
     if st.session_state.get(picker_key) not in labels:
         st.session_state.pop(picker_key, None)
+    # Un clic en la tabla de clientes llega por la sesión y se traduce aquí a
+    # la opción exacta del buscador, que sigue funcionando por su cuenta.
+    requested = st.session_state.pop(CLAVE_DETALLE_SOLICITADO, None)
+    if requested is not None:
+        match = next(
+            (label for label in labels
+             if label.casefold() == str(requested).strip().casefold()),
+            None,
+        )
+        if match is not None:
+            st.session_state[picker_key] = match
     default_index = None
     if picker_key not in st.session_state and len(filters.customers) == 1:
         selected_name = filters.customers[0]
@@ -1241,7 +1336,11 @@ def render_manual_portfolio(
                 st.success("Muestra cargada. Puedes editarla, registrar abonos y revisar la conciliación.")
                 st.rerun()
     with customers_tab:
-        _render_customer_debt(company, _filter_customers(invoices, filters.customers))
+        clicked_customer = _render_customer_debt(
+            company, _filter_customers(invoices, filters.customers)
+        )
+        if clicked_customer:
+            st.session_state[CLAVE_DETALLE_SOLICITADO] = clicked_customer
         st.write("")
         payment_from_detail = _render_customer_detail(invoices, filters)
     edit_invoice_id = st.session_state.get(CLAVE_FACTURA_EN_EDICION)

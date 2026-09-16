@@ -7,6 +7,36 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-16 — Clic sobre un cliente abre su detalle; anchos fijos
+
+- Solicitud del dueño: al investigar un cliente, poder dar clic sobre su fila
+  en «Clientes y saldo pendiente» y ver sus facturas, sin retirar el buscador
+  del detalle — los dos caminos siguen disponibles. Además, que ese cuadro
+  tenga anchos fijos, para visualizarlo siempre bien.
+- Clic: un clic sencillo (o Enter) sobre cualquier celda de la fila selecciona
+  al cliente en el buscador del detalle, que se abre debajo con su estado de
+  cuenta por empresa. Cada gesto lleva su propio identificador y se consume
+  una sola vez, igual que el doble clic de edición: sin eso, el clic viejo
+  pisaría al buscador en cada rerun y sería imposible cambiar de cliente.
+- Anchos: Saldo pendiente (190 px), Facturas con saldo (215 px) y Empresas
+  (230 px) quedan cerrados y sin arrastre; la razón social se queda con todo
+  el espacio restante para leerse completa. La grilla compartida acepta ahora
+  un ajuste puntual de columnas sin conocer ninguna regla de negocio.
+- De paso: la prueba «sin detalle» de la vista Siigo seguía afirmando la
+  columna Estado, retirada el 2026-09-15 al entrar «Días en cartera»; se
+  actualizó y se cubrió la columna nueva (conteo desde la emisión, cero para
+  fechas futuras y raya para fecha ausente), que no tenía ninguna prueba.
+- Archivos: `src/ui/grid.py`, `src/views/manual.py`,
+  `tests/test_detalle_por_clic.py` (nuevo) y `tests/test_siigo_vista.py`.
+- Impacto contable: ninguno. Es navegación y presentación; no cambia ningún
+  importe, fórmula, abono ni el registro de movimientos.
+- Validación: 211 pruebas en verde y pyflakes limpio. Verificado además en el
+  navegador con datos de demostración en una base temporal: el clic abre el
+  estado de cuenta del cliente, el buscador sigue eligiendo por su cuenta sin
+  que el clic anterior lo devuelva, los tres anchos quedan aplicados (medidos
+  en la grilla: 190/215/230) y el encabezado «Facturas con saldo» se lee
+  completo. No se tocó la cartera real.
+
 ## 2026-09-15 — Dueño confirma las dos reglas de conciliación
 
 - Decisión del dueño: aprueba los dos veredictos de comparación que la

@@ -89,11 +89,19 @@ def render_grid(
     key: str,
     edit_on_double_click: bool = False,
     on_row_event: JsCode | None = None,
+    on_cell_click: JsCode | None = None,
+    click_event_name: str | None = None,
+    column_config: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Muestra una tabla de librería con cabecera azul y menú tipo Excel.
 
     ``on_row_event`` solo lo usa la cartera manual para abrir la edición con
     doble clic. La cartera Siigo nunca lo pasa: es de solo consulta.
+
+    ``on_cell_click`` responde al clic sencillo (y a Enter) con el evento
+    ``click_event_name``; lo usa la tabla de clientes para abrir el detalle.
+    ``column_config`` ajusta columnas puntuales (anchos fijos, por ejemplo)
+    sin que este módulo conozca ninguna regla de negocio.
     """
 
     builder = GridOptionsBuilder.from_dataframe(table)
@@ -122,11 +130,16 @@ def render_grid(
     for name in COLUMNAS_DERECHA:
         if name in table.columns:
             builder.configure_column(name, cellStyle={"textAlign": "right"})
+    if column_config:
+        # Después de las columnas comunes, para que el ajuste puntual gane.
+        for nombre, config in column_config.items():
+            if nombre in table.columns:
+                builder.configure_column(nombre, **config)
     builder.configure_grid_options(
         animateRows=False,
         headerHeight=42,
         rowHeight=38,
-        suppressCellFocus=not edit_on_double_click,
+        suppressCellFocus=not (edit_on_double_click or on_cell_click is not None),
         suppressMovableColumns=True,
     )
     if edit_on_double_click and on_row_event is not None:
@@ -135,13 +148,22 @@ def render_grid(
             onCellDoubleClicked=on_row_event,
             onCellKeyDown=on_row_event,
         )
+    elif on_cell_click is not None:
+        builder.configure_grid_options(
+            onCellClicked=on_cell_click,
+            onCellKeyDown=on_cell_click,
+        )
     result = AgGrid(
         table,
         gridOptions=builder.build(),
         height=max(120, 50 + 38 * len(table)),
         fit_columns_on_grid_load=False,
         update_mode=GridUpdateMode.NO_UPDATE,
-        update_on=["invoiceEditRequested"] if edit_on_double_click else [],
+        update_on=(
+            ["invoiceEditRequested"] if edit_on_double_click
+            else [click_event_name] if click_event_name
+            else []
+        ),
         allow_unsafe_jscode=True,
         enable_enterprise_modules=False,
         theme="alpine",
