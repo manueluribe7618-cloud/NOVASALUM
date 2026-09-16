@@ -801,8 +801,12 @@ def _render_subtotal_input(
 def _sync_invoice_company() -> None:
     """Propone el nuevo prefijo sin sustituir un prefijo personalizado."""
 
-    company = st.session_state["factura_empresa"]
+    company = st.session_state.get("factura_empresa")
+    if company not in EMPRESAS:
+        return
     previous = st.session_state.get("factura_empresa_anterior", company)
+    if previous not in EMPRESAS:
+        previous = company
     prefix = str(st.session_state.get("factura_prefijo", "")).strip().upper()
     if not prefix or prefix == EMPRESAS[previous]["prefijo"]:
         st.session_state["factura_prefijo"] = EMPRESAS[company]["prefijo"]
