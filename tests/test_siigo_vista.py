@@ -142,7 +142,28 @@ class TablasTests(unittest.TestCase):
         visible = tabla_general([fila]).iloc[0]
         for columna in ("Detalle del servicio", "Subtotal", "IVA", "Retefuente", "ICA"):
             self.assertEqual(visible[columna], "—", columna)
-        self.assertEqual(visible["Estado"], "Sin leer")
+        # La columna Estado se reemplazó por «Días en cartera» el 2026-09-15;
+        # la señal de honestidad de una factura sin leer son las rayas de
+        # arriba y el conteo del panel de supervisión.
+
+    def test_los_dias_en_cartera_se_cuentan_desde_la_emision(self) -> None:
+        import datetime as dt
+        from src.siigo_vista import dias_en_cartera
+
+        self.assertEqual(
+            dias_en_cartera("2026-03-12", hoy=dt.date(2026, 3, 20)), 8
+        )
+        # Una fecha futura no produce días negativos.
+        self.assertEqual(
+            dias_en_cartera("2026-03-25", hoy=dt.date(2026, 3, 20)), 0
+        )
+
+    def test_una_fecha_ausente_deja_los_dias_con_raya(self) -> None:
+        from src.siigo_vista import dias_en_cartera, tabla_general
+
+        self.assertEqual(dias_en_cartera(None), "—")
+        visible = tabla_general([_fila(fecha=None)]).iloc[0]
+        self.assertEqual(visible["Días en cartera"], "—")
 
     def test_la_columna_abonos_queda_vacia(self) -> None:
         self.assertEqual(tabla_general([_fila()]).iloc[0]["Abonos"], "")
