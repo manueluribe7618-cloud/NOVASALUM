@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import threading
 from typing import Any, Iterator, Mapping, Sequence
@@ -128,23 +129,29 @@ def descripcion_almacen() -> str:
 _CERTIFICADO_SUPABASE = Path(__file__).resolve().parent.parent / "certs" / "supabase-root-2021-ca.pem"
 
 
+# host[:puerto][/base[?clave=valor&…]]: solo los valores de los parámetros admiten @.
+_DESTINO_PG = re.compile(r"[^@/?#\s]+(/[^@?#\s]*(\?[^@=&#\s]+=[^&#\s]*(&[^@=&#\s]+=[^&#\s]*)*)?)?")
+
+
 def _separar_clave(url: str) -> tuple[str, str | None]:
     """Saca la contraseña de la URL para que libpq nunca la lea ni la repita.
 
     libpq copia en sus mensajes de error el pedazo de URL que no entiende, y
     una contraseña con @ / ? # o espacios sin codificar terminaba en pantalla.
-    Se corta en la última @, así esa contraseña igual conecta; si ya viene
-    codificada (%40, %2F…), se decodifica como lo haría libpq.
+    Se corta en la primera @ tras la cual queda un destino válido, así esa
+    contraseña igual conecta y una @ en los parámetros no se confunde con la
+    suya. Lo que venga codificado (%40, %25…) se decodifica como lo haría libpq.
     """
 
     esquema, barras, resto = url.partition("://")
-    credenciales, arroba, destino = resto.rpartition("@")
-    usuario, dos_puntos, clave = credenciales.partition(":")
-    if not (barras and arroba and dos_puntos):
+    arrobas = [posicion for posicion, caracter in enumerate(resto) if caracter == "@"]
+    if not (barras and arrobas):
         return url, None
-    if not any(caracter in "@/?#" or caracter.isspace() for caracter in clave):
-        clave = unquote(clave)
-    return f"{esquema}://{usuario}@{destino}", clave
+    corte = next((i for i in arrobas if _DESTINO_PG.fullmatch(resto[i + 1:])), arrobas[-1])
+    usuario, dos_puntos, clave = resto[:corte].partition(":")
+    if not dos_puntos:
+        return url, None
+    return f"{esquema}://{usuario}@{resto[corte + 1:]}", unquote(clave)
 
 
 def _url_con_tls(url: str) -> str:

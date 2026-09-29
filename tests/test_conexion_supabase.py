@@ -51,6 +51,27 @@ class ContrasenaConCaracteresEspeciales(unittest.TestCase):
             for inicio in range(len(clave) - 3):
                 self.assertNotIn(clave[inicio:inicio + 4], url, clave)
 
+    def test_una_contrasena_codificada_a_medias_se_decodifica(self) -> None:
+        """Como ya lo hacía libpq; y la guía del %25 sirve aunque haya una @."""
+
+        for escrita, clave in (("Se%40cre#ta", "Se@cre#ta"), ("50%25off@home", "50%off@home")):
+            with self.subTest(escrita=escrita):
+                url, separada = db._separar_clave(_url(escrita))
+                self.assertEqual(separada, clave)
+                datos = conninfo_to_dict(make_conninfo(db._url_con_tls(url), password=separada))
+                self.assertEqual(datos["password"], clave)
+                self.assertEqual(datos["host"], "pooler.supabase.com")
+
+    def test_una_arroba_en_los_parametros_no_se_toma_por_la_contrasena(self) -> None:
+        for clave in ("Clave123", "Secre@ta2026"):
+            with self.subTest(clave=clave):
+                url, separada = db._separar_clave(_url(clave, "?application_name=a@b"))
+                self.assertEqual(separada, clave)
+                datos = conninfo_to_dict(url)
+                self.assertEqual(datos["host"], "pooler.supabase.com")
+                self.assertEqual(datos["dbname"], "postgres")
+                self.assertEqual(datos["application_name"], "a@b")
+
     def test_una_url_sin_contrasena_queda_igual(self) -> None:
         for url in ("postgresql://postgres.abc@host:6543/postgres", "host=x dbname=y"):
             self.assertEqual(db._separar_clave(url), (url, None))
