@@ -177,5 +177,94 @@ class FacturasEnUnaSolaFuente(unittest.TestCase):
         self.assertIn(("LUAC", "SOLO_MANUAL"), estados)
 
 
+class FacturasAnuladas(unittest.TestCase):
+    def test_anulada_en_siigo_y_viva_en_la_manual_no_cuadra(self):
+        # MSU649: Siigo la anuló con su saldo original; antes salía CUADRADA.
+        filas = _build_reconciliation(
+            [factura_manual()], facturas_siigo({"estado_siigo": "ANULADA"})
+        )
+        self.assertEqual(filas[0]["estado"], "ANULADA_EN_UNA_FUENTE")
+        self.assertIsNone(filas[0]["dif_saldo"])
+
+    def test_anulada_en_la_manual_y_viva_en_siigo_no_es_solo_siigo(self):
+        # LUA1739: antes la manual anulada ni se leía y salía «Solo Siigo».
+        filas = _build_reconciliation(
+            [factura_manual(estado="ANULADA", anulada=1)], facturas_siigo({"estado_siigo": "VENCIDA"})
+        )
+        self.assertEqual(filas[0]["estado"], "ANULADA_EN_UNA_FUENTE")
+
+    def test_anulada_en_las_dos_fuentes_no_se_lista(self):
+        filas = _build_reconciliation(
+            [factura_manual(estado="ANULADA", anulada=1)],
+            facturas_siigo({"estado_siigo": "ANULADA"}),
+        )
+        self.assertEqual(filas, [])
+
+    def test_el_estado_nuevo_tiene_etiqueta(self):
+        from src.ui.components import ESTADO_META
+
+        for estado in ("ANULADA_EN_UNA_FUENTE", "OTRA_MONEDA"):
+            self.assertIn(estado, ESTADO_META)
+
+
+class FacturasEnOtraMoneda(unittest.TestCase):
+    def test_dolares_no_se_comparan_contra_pesos(self):
+        # MSU650: US$ 2.000 en Siigo contra $ 2.000 en la manual salía CUADRADA.
+        filas = _build_reconciliation(
+            [factura_manual(saldo_cop=2_000)],
+            facturas_siigo({"moneda": "USD", "saldo_siigo": 2_000}),
+        )
+        self.assertEqual(filas[0]["estado"], "OTRA_MONEDA")
+        for clave in ("dif_saldo", "dif_iva", "dif_retefuente", "dif_ica", "dif_descuento"):
+            self.assertIsNone(filas[0][clave], clave)
+
+
+class AlcanceDeLaLectura(unittest.TestCase):
+    """Solo se compara lo que Siigo alcanzó a consultar."""
+
+    def setUp(self):
+        import datetime as dt
+
+        from src.siigo_lectura import ParametrosLectura
+
+        self.parametros = ParametrosLectura(
+            ("NOVASA",), dt.date(2026, 9, 1), dt.date(2026, 9, 29)
+        )
+
+    def consultadas(self, manual, siigo=None, errores=None, parametros="por_defecto"):
+        from src.views.conciliacion import _manual_consultado
+
+        parametros = self.parametros if parametros == "por_defecto" else parametros
+        filas, _ = _manual_consultado(
+            manual, siigo if siigo is not None else pd.DataFrame(), parametros, errores or {}
+        )
+        return [fila["factura"] for fila in filas]
+
+    def test_otro_periodo_u_otra_empresa_no_se_comparan(self):
+        manual = [
+            factura_manual(factura="FEBA1001", fecha="2026-09-01"),
+            factura_manual(factura="FEBA900", fecha="2026-08-27"),
+            factura_manual(empresa_codigo="LUAC", factura="LUA50", fecha="2026-09-01"),
+        ]
+        self.assertEqual(self.consultadas(manual), ["FEBA1001"])
+
+    def test_una_empresa_que_fallo_entera_no_se_compara(self):
+        manual = [factura_manual(factura="FEBA1001", fecha="2026-09-01")]
+        self.assertEqual(self.consultadas(manual, errores={"NOVASA": "HTTP 500"}), [])
+        # Una falla de una sola factura no excluye a la empresa.
+        self.assertEqual(
+            self.consultadas(manual, errores={"NOVASA · FACTURA FEBA7": "HTTP 500"}),
+            ["FEBA1001"],
+        )
+
+    def test_si_siigo_la_devolvio_se_compara_aunque_la_fecha_difiera(self):
+        manual = [factura_manual(factura="FEBA2050", fecha="2026-08-15")]
+        self.assertEqual(self.consultadas(manual, siigo=facturas_siigo({})), ["FEBA2050"])
+
+    def test_sin_parametros_la_muestra_no_filtra(self):
+        manual = [factura_manual(empresa_codigo="LUAC", factura="LUA50", fecha="2020-01-01")]
+        self.assertEqual(self.consultadas(manual, parametros=None), ["LUA50"])
+
+
 if __name__ == "__main__":
     unittest.main()

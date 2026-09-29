@@ -21,6 +21,9 @@ from src.siigo_lectura import (
 )
 
 
+ORIGEN_MUESTRA = "Muestra de demostración"
+
+
 def _factura(
     identificador: str,
     nombre: str,
@@ -181,7 +184,7 @@ def cargar_muestra(hoy: dt.date | None = None) -> Reporte:
 
     reporte = reporte_desde_facturas(
         {"NOVASA": novasa, "LUAC": luac, "MSU": msu},
-        origen="Muestra de demostración",
+        origen=ORIGEN_MUESTRA,
         hoy=hoy,
     )
     reporte.errores["NOVASA · FACTURA FEBA2054"] = (
@@ -190,4 +193,4 @@ def cargar_muestra(hoy: dt.date | None = None) -> Reporte:
     return reporte
 
 
-__all__ = ["cargar_muestra"]
+__all__ = ["ORIGEN_MUESTRA", "cargar_muestra"]
