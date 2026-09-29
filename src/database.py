@@ -19,7 +19,7 @@ import sqlite3
 import threading
 from typing import Any, Iterator, Mapping, Sequence
 
-from src.formato import hoy_colombia
+from src.formato import MAXIMO_COP, clave_nombre, fmt_cop, hoy_colombia
 
 try:  # psycopg solo hace falta cuando los datos viven en Supabase
     import psycopg
@@ -326,8 +326,58 @@ def inicializar(ruta: str | Path | None = None) -> None:
                 """,
                 (codigo, datos["nombre"], datos["prefijo"], datos["color"]),
             )
+        _unificar_clientes_repetidos(conexion)
     if en_postgres:
         _ESQUEMA_PG_LISTO = True
+
+
+def _unificar_clientes_repetidos(conexion: Any) -> None:
+    """Une el mismo cliente guardado dos veces en una empresa ('ACME  SAS' y 'Acme SAS').
+
+    Conserva el id más antiguo, le pasa las facturas y los abonos de los
+    repetidos y deja constancia en la auditoría. Sin repetidos no escribe nada.
+    """
+
+    grupos: dict[tuple[str, str], list[Any]] = {}
+    for fila in conexion.execute(
+        "SELECT id, empresa_codigo, nombre FROM clientes ORDER BY id"
+    ).fetchall():
+        clave = (str(fila["empresa_codigo"]), clave_nombre(fila["nombre"]))
+        grupos.setdefault(clave, []).append(fila)
+    for (empresa, _), filas in grupos.items():
+        conservado = int(filas[0]["id"])
+        nombre = str(filas[0]["nombre"])
+        nombre_limpio = " ".join(nombre.split())
+        repetidos = [int(fila["id"]) for fila in filas[1:]]
+        if not repetidos and nombre_limpio == nombre:
+            continue
+        for repetido in repetidos:
+            conexion.execute(
+                "UPDATE facturas_manual SET cliente_id = ? WHERE cliente_id = ?",
+                (conservado, repetido),
+            )
+            conexion.execute(
+                "UPDATE abonos_manual SET cliente_id = ? WHERE cliente_id = ?",
+                (conservado, repetido),
+            )
+            conexion.execute("DELETE FROM clientes WHERE id = ?", (repetido,))
+        if nombre_limpio != nombre:
+            conexion.execute(
+                "UPDATE clientes SET nombre = ?, actualizado_en = ? WHERE id = ?",
+                (nombre_limpio, _ahora(), conservado),
+            )
+        _registrar(
+            conexion,
+            "cliente",
+            conservado,
+            "UNIFICADO",
+            {
+                "empresa": empresa,
+                "cliente": nombre_limpio,
+                "nombres_unidos": [str(fila["nombre"]) for fila in filas],
+                "ids_unidos": repetidos,
+            },
+        )
 
 
 _ESQUEMA_BASE = """
@@ -495,17 +545,37 @@ def _empresa(valor: Any) -> str:
 def _pesos(valor: Any, campo: str, *, permite_cero: bool = True) -> int:
     if isinstance(valor, bool):
         raise ErrorCartera(f"{campo} debe ser un valor numérico.")
-    try:
-        numero = float(valor)
-    except (TypeError, ValueError) as exc:
-        raise ErrorCartera(f"{campo} debe ser un valor numérico.") from exc
-    if numero != numero or numero in (float("inf"), float("-inf")):
-        raise ErrorCartera(f"{campo} no tiene un valor válido.")
-    redondeado = int(round(numero))
+    if isinstance(valor, int):
+        redondeado = valor
+    else:
+        try:
+            numero = float(valor)
+        except (TypeError, ValueError) as exc:
+            raise ErrorCartera(f"{campo} debe ser un valor numérico.") from exc
+        if numero != numero or numero in (float("inf"), float("-inf")):
+            raise ErrorCartera(f"{campo} no tiene un valor válido.")
+        redondeado = int(round(numero))
     if redondeado < 0 or (not permite_cero and redondeado == 0):
         operador = "mayor que cero" if not permite_cero else "igual o mayor que cero"
         raise ErrorCartera(f"{campo} debe ser {operador}.")
+    if redondeado > MAXIMO_COP:
+        raise ErrorCartera(
+            f"{campo} es demasiado grande: el máximo que se puede guardar es "
+            f"{fmt_cop(MAXIMO_COP)}. Revisa si sobran ceros."
+        )
     return redondeado
+
+
+def _total_valido(valores: Mapping[str, Any]) -> int:
+    total = _total_factura(valores)
+    if total <= 0:
+        raise ErrorCartera("El total de la factura debe ser mayor que cero.")
+    if total > MAXIMO_COP:
+        raise ErrorCartera(
+            "El total de la factura es demasiado grande: el máximo que se puede "
+            f"guardar es {fmt_cop(MAXIMO_COP)}. Revisa si sobran ceros."
+        )
+    return total
 
 
 def _fecha(valor: Any, campo: str, *, obligatoria: bool = True) -> str | None:
@@ -566,23 +636,31 @@ def _registrar(
     )
 
 
+def _buscar_cliente(conexion: Any, empresa_codigo: str, nombre: str) -> int | None:
+    # Se compara en Python: lower() de SQLite no pasa a minúscula las tildes.
+    clave = clave_nombre(nombre)
+    for fila in conexion.execute(
+        "SELECT id, nombre FROM clientes WHERE empresa_codigo = ? ORDER BY id ASC",
+        (empresa_codigo,),
+    ).fetchall():
+        if clave_nombre(fila["nombre"]) == clave:
+            return int(fila["id"])
+    return None
+
+
+def _nombre_cliente(nombre: Any) -> str:
+    return " ".join(_texto(nombre, "Cliente", obligatorio=True).split())
+
+
 def _cliente_id(
     conexion: sqlite3.Connection,
     empresa_codigo: str,
     nombre: Any,
 ) -> int:
-    nombre_limpio = _texto(nombre, "Cliente", obligatorio=True)
-    encontrado = conexion.execute(
-        """
-        SELECT id FROM clientes
-        WHERE empresa_codigo = ? AND nombre = ?
-        ORDER BY id ASC
-        LIMIT 1
-        """,
-        (empresa_codigo, nombre_limpio),
-    ).fetchone()
-    if encontrado:
-        return int(encontrado["id"])
+    nombre_limpio = _nombre_cliente(nombre)
+    encontrado = _buscar_cliente(conexion, empresa_codigo, nombre_limpio)
+    if encontrado is not None:
+        return encontrado
 
     marca = _ahora()
     return _insertar(
@@ -614,9 +692,7 @@ def _preparar_factura(datos: Mapping[str, Any]) -> dict[str, Any]:
     }
     if valores["descuento_cop"] > valores["subtotal_cop"]:
         raise ErrorCartera("El descuento no puede ser mayor que el subtotal.")
-    total = _total_factura(valores)
-    if total <= 0:
-        raise ErrorCartera("El total de la factura debe ser mayor que cero.")
+    total = _total_valido(valores)
     return {
         "empresa": empresa,
         "prefijo": prefijo,
@@ -782,12 +858,24 @@ def actualizar_campos_factura(
 
     También permite corregir errores de digitación en el número de factura y
     en las fechas de emisión y vencimiento; cuando esos campos no llegan, se
-    conservan los valores guardados.
+    conservan los valores guardados. El cliente solo se puede cambiar mientras
+    la factura no tenga abonos, porque cada pago pertenece a su cliente.
     """
 
     inicializar(ruta)
     with _transaccion(ruta) as conexion:
         anterior = _factura_para_editar(conexion, int(factura_id))
+        cliente_id = int(anterior["cliente_id"])
+        if "cliente" in datos:
+            empresa = str(anterior["empresa_codigo"])
+            nombre_cliente = _nombre_cliente(datos.get("cliente"))
+            if _buscar_cliente(conexion, empresa, nombre_cliente) != cliente_id:
+                if int(anterior["abonos_cop"]) > 0:
+                    raise ErrorCartera(
+                        "No se puede cambiar el cliente de una factura con abonos: "
+                        "esos pagos ya quedaron registrados a nombre del cliente actual."
+                    )
+                cliente_id = _cliente_id(conexion, empresa, nombre_cliente)
         numero = _texto(
             datos.get("numero", anterior["numero"]),
             "Número de factura",
@@ -812,9 +900,7 @@ def actualizar_campos_factura(
         }
         if valores["descuento_cop"] > valores["subtotal_cop"]:
             raise ErrorCartera("El descuento no puede ser mayor que el subtotal.")
-        total = _total_factura(valores)
-        if total <= 0:
-            raise ErrorCartera("El total de la factura debe ser mayor que cero.")
+        total = _total_valido(valores)
         if total < int(anterior["abonos_cop"]):
             raise ErrorCartera(
                 "El total nuevo no puede ser menor que los abonos ya aplicados."
@@ -823,13 +909,14 @@ def actualizar_campos_factura(
             conexion.execute(
                 """
                 UPDATE facturas_manual
-                SET numero = ?, fecha = ?, vencimiento = ?,
+                SET cliente_id = ?, numero = ?, fecha = ?, vencimiento = ?,
                     descripcion = ?, placas = ?, subtotal_cop = ?, iva_cop = ?,
                     retefuente_cop = ?, ica_cop = ?, descuento_cop = ?,
                     actualizada_en = ?
                 WHERE id = ?
                 """,
                 (
+                    cliente_id,
                     numero,
                     fecha,
                     vencimiento,
@@ -854,7 +941,13 @@ def actualizar_campos_factura(
             "factura_manual",
             factura_id,
             "ACTUALIZADA",
-            {"antes": dict(anterior), "despues": dict(datos), "total_cop": total},
+            {
+                "antes": dict(anterior),
+                "despues": dict(datos),
+                "total_cop": total,
+                "cliente_id_antes": int(anterior["cliente_id"]),
+                "cliente_id_despues": cliente_id,
+            },
         )
 
 
@@ -1000,9 +1093,9 @@ def listar_nombres_clientes(ruta: str | Path | None = None) -> list[str]:
         filas = conexion.execute("SELECT nombre FROM clientes ORDER BY id").fetchall()
     nombres: dict[str, str] = {}
     for fila in filas:
-        nombre = str(fila["nombre"]).strip()
+        nombre = " ".join(str(fila["nombre"]).split())
         if nombre:
-            nombres.setdefault(nombre.casefold(), nombre)
+            nombres.setdefault(clave_nombre(nombre), nombre)
     return sorted(nombres.values(), key=str.casefold)
 
 
@@ -1260,9 +1353,23 @@ def hay_datos(ruta: str | Path | None = None) -> bool:
         )
 
 
-def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
-    """Carga una muestra explícita para conocer la interfaz sin datos reales."""
+def admite_demostracion(ruta: str | Path | None = None) -> bool:
+    """La muestra es solo para la base local: en la nube está la cartera real."""
 
+    return not _usa_postgres(ruta)
+
+
+def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
+    """Carga una muestra explícita para conocer la interfaz sin datos reales.
+
+    Sus facturas usan el prefijo DEMO para que nunca ocupen un número real.
+    """
+
+    if not admite_demostracion(ruta):
+        raise ErrorCartera(
+            "Los datos de demostración no se pueden cargar en la base de la nube: "
+            "ahí está la cartera real."
+        )
     if hay_datos(ruta):
         raise ErrorCartera(
             "La demostración solo se puede cargar en una cartera manual vacía."
@@ -1271,7 +1378,7 @@ def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
     muestras = [
         {
             "empresa_codigo": "NOVASA",
-            "prefijo": "FEBA",
+            "prefijo": "DEMO",
             "numero": "1079",
             "fecha": hoy - timedelta(days=55),
             "vencimiento": hoy - timedelta(days=25),
@@ -1286,7 +1393,7 @@ def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
         },
         {
             "empresa_codigo": "NOVASA",
-            "prefijo": "FEBA",
+            "prefijo": "DEMO",
             "numero": "1082",
             "fecha": hoy - timedelta(days=20),
             "vencimiento": hoy + timedelta(days=10),
@@ -1301,7 +1408,7 @@ def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
         },
         {
             "empresa_codigo": "NOVASA",
-            "prefijo": "FEBA",
+            "prefijo": "DEMO",
             "numero": "1084",
             "fecha": hoy - timedelta(days=8),
             "vencimiento": hoy + timedelta(days=22),
@@ -1316,7 +1423,7 @@ def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
         },
         {
             "empresa_codigo": "LUAC",
-            "prefijo": "LUA",
+            "prefijo": "DEMO",
             "numero": "208",
             "fecha": hoy - timedelta(days=34),
             "vencimiento": hoy - timedelta(days=4),
@@ -1331,7 +1438,7 @@ def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
         },
         {
             "empresa_codigo": "MSU",
-            "prefijo": "MSU",
+            "prefijo": "DEMO",
             "numero": "679",
             "fecha": hoy - timedelta(days=12),
             "vencimiento": hoy + timedelta(days=18),
@@ -1363,6 +1470,7 @@ __all__ = [
     "EMPRESAS",
     "ErrorCartera",
     "actualizar_campos_factura",
+    "admite_demostracion",
     "anular_factura",
     "cargar_datos_demostracion",
     "clientes_con_saldo",

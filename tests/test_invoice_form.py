@@ -11,6 +11,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from src import database as db
+from src.formato import hoy_colombia
 from src.views.manual import _cerrar_dialogo_factura, _consume_invoice_edit_event
 
 
@@ -333,6 +334,122 @@ _render_quick_edit(db.listar_facturas(), use_expander=False, invoice_id={factura
             event["data"]["request_id"] = "factura-fuera-del-filtro"
             self.assertIsNone(_consume_invoice_edit_event(event, [{"id": 9000}]))
             self.assertIsNone(_consume_invoice_edit_event(None, invoices))
+
+    def test_descuento_y_abono_vacios_cuentan_como_cero(self) -> None:
+        app = self.new_form()
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("VACIOS")
+        app.text_input(key="factura_subtotal").input("100.000")
+        app.text_input(key="factura_descuento").input("")
+        app.text_input(key="factura_abono_monto").input("").run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        self.assertEqual(app.metric[0].value, "$ 100.000")
+        self.assertFalse(app.button(key="factura_guardar").disabled)
+        app.button(key="factura_guardar").click().run()
+        self.assertFalse(app.error)
+        saved = next(row for row in db.listar_facturas() if row["numero"] == "VACIOS")
+        self.assertEqual(saved["descuento_cop"], 0)
+        self.assertEqual(saved["total_cop"], 100_000)
+        self.assertEqual(db.listar_abonos(), [])
+
+    def test_un_importe_gigante_avisa_en_espanol_y_no_rompe(self) -> None:
+        app = self.new_form()
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("GIGANTE")
+        app.text_input(key="factura_subtotal").input("99999999999999999999").run()
+        self.assertFalse(app.exception)
+        self.assertIn("demasiado grande", " ".join(error.value for error in app.error))
+        self.assertTrue(app.button(key="factura_guardar").disabled)
+        self.assertEqual(app.metric[0].value, "—")
+        # Cada valor cabe, pero el total con IVA supera el tope de Supabase.
+        app.text_input(key="factura_subtotal").input("2.000.000.000")
+        app.number_input(key="factura_iva_porcentaje").set_value(19.0).run()
+        self.assertFalse(app.exception)
+        self.assertIn(
+            "total a cobrar es demasiado grande", " ".join(error.value for error in app.error)
+        )
+        self.assertTrue(app.button(key="factura_guardar").disabled)
+        self.assertEqual(len(db.listar_facturas()), 1)
+
+    def test_la_confirmacion_de_guardado_sobrevive_al_rerun(self) -> None:
+        app = self.new_form()
+        app.selectbox(key="factura_cliente").select("Transportes de Prueba SAS")
+        app.text_input(key="factura_numero").input("AVISO-1")
+        app.text_input(key="factura_subtotal").input("100.000").run()
+        app.button(key="factura_guardar").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["aviso_manual"], "Factura registrada.")
+
+    def edit_app(self, invoice_id: int) -> AppTest:
+        app = AppTest.from_string(
+            "from src import database as db\n"
+            "from src.views.manual import _render_quick_edit\n"
+            f"_render_quick_edit(db.listar_facturas(), use_expander=False, invoice_id={invoice_id})\n"
+        ).run()
+        self.assertFalse(app.exception)
+        return app
+
+    def save_edit(self, app: AppTest) -> None:
+        next(button for button in app.button if button.label == "Guardar cambios").click().run()
+        self.assertFalse(app.exception)
+
+    def test_editar_corrige_el_cliente_si_la_factura_no_tiene_abonos(self) -> None:
+        db.crear_factura(
+            {
+                "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": "OTRO-1",
+                "fecha": hoy_colombia(), "cliente": "Cliente Correcto SAS",
+                "subtotal_cop": 100_000,
+            }
+        )
+        app = self.edit_app(self.invoice_id)
+        customer = app.selectbox(key=f"editar_factura_{self.invoice_id}_cliente")
+        self.assertFalse(customer.disabled)
+        self.assertEqual(customer.value, "Transportes de Prueba SAS")
+        customer.select("Cliente Correcto SAS").run()
+        self.save_edit(app)
+        self.assertFalse(app.error)
+        self.assertEqual(db.obtener_factura(self.invoice_id)["cliente"], "Cliente Correcto SAS")
+        self.assertEqual(app.session_state["aviso_manual"], "Cambios guardados.")
+
+    def test_con_abonos_el_cliente_queda_bloqueado_y_se_explica(self) -> None:
+        invoice = db.obtener_factura(self.invoice_id)
+        db.registrar_abono(
+            empresa_codigo="NOVASA", cliente_id=invoice["cliente_id"], fecha=hoy_colombia(),
+            referencia="PAGO", monto_cop=100_000,
+            aplicaciones=[{"factura_id": self.invoice_id, "monto_cop": 100_000}],
+        )
+        app = self.edit_app(self.invoice_id)
+        self.assertTrue(app.selectbox(key=f"editar_factura_{self.invoice_id}_cliente").disabled)
+        self.assertIn("tiene abonos", " ".join(caption.value for caption in app.caption))
+        self.save_edit(app)
+        self.assertFalse(app.error)
+        self.assertEqual(db.obtener_factura(self.invoice_id)["cliente"], "Transportes de Prueba SAS")
+
+    def test_editar_con_el_descuento_vacio_lo_deja_en_cero(self) -> None:
+        app = self.edit_app(self.invoice_id)
+        app.text_input(key=f"editar_factura_{self.invoice_id}_descuento").input("").run()
+        self.assertFalse(app.error)
+        self.save_edit(app)
+        self.assertEqual(db.obtener_factura(self.invoice_id)["descuento_cop"], 0)
+
+    def test_anular_exige_una_confirmacion_explicita(self) -> None:
+        app = self.edit_app(self.invoice_id)
+        self.assertIn("no se puede deshacer", " ".join(caption.value for caption in app.caption))
+        void = next(button for button in app.button if button.label == "Anular factura")
+        self.assertTrue(void.disabled)
+        void.click().run()
+        self.assertFalse(app.exception)
+        self.assertNotEqual(db.obtener_factura(self.invoice_id)["estado"], "ANULADA")
+
+        app.checkbox(key=f"editar_factura_{self.invoice_id}_confirmar_anulacion").check().run()
+        next(button for button in app.button if button.label == "Anular factura").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(db.obtener_factura(self.invoice_id)["estado"], "ANULADA")
+        self.assertEqual(
+            app.session_state["aviso_manual"],
+            "Factura anulada. El registro continúa en auditoría.",
+        )
 
     def test_cerrar_formulario_limpia_el_borrador_completo(self) -> None:
         state = {

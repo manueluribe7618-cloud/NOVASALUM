@@ -11,6 +11,9 @@ import re
 # Colombia no tiene horario de verano; un desfase fijo evita depender de tzdata.
 ZONA_COLOMBIA = dt.timezone(dt.timedelta(hours=-5), "COT")
 
+# Tope de las columnas de dinero en Supabase (INTEGER de Postgres).
+MAXIMO_COP = 2_147_483_647
+
 
 def ahora_colombia() -> dt.datetime:
     return dt.datetime.now(ZONA_COLOMBIA)
@@ -20,6 +23,12 @@ def hoy_colombia() -> dt.date:
     """El día calendario en Colombia; el servidor de la nube corre en UTC."""
 
     return ahora_colombia().date()
+
+
+def clave_nombre(nombre) -> str:
+    """La misma razón social sin importar mayúsculas ni espacios repetidos."""
+
+    return " ".join(str(nombre or "").split()).casefold()
 
 
 def parse_cop(texto: str) -> int:

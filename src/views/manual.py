@@ -18,7 +18,7 @@ import streamlit as st
 from st_aggrid import JsCode
 
 from src import database as db
-from src.formato import hoy_colombia, parse_cop
+from src.formato import MAXIMO_COP, clave_nombre, hoy_colombia, parse_cop
 from src.taxes import TAX_COMPONENTS, TAX_DEFAULTS, calculate_tax
 from src.ui.grid import render_grid
 from src.ui.portfolio_analysis import (
@@ -116,6 +116,16 @@ COLUMNAS_CLIENTES = {
 # buscador del detalle, que lo resuelve contra sus propias opciones.
 CLAVE_DETALLE_SOLICITADO = "detalle_cliente_solicitado"
 
+# st.rerun() borra un st.success dibujado justo antes; el aviso viaja por la sesión.
+CLAVE_AVISO = "aviso_manual"
+
+# Cliente elegido en el diálogo de abono, para notar si desaparece de la lista.
+CLAVE_CLIENTE_ABONO = "abono_cliente_elegido"
+
+
+def _avisar(mensaje: str) -> None:
+    st.session_state[CLAVE_AVISO] = mensaje
+
 
 _INVOICE_DRAFT_KEYS = (
     "factura_empresa",
@@ -179,6 +189,7 @@ def _cerrar_dialogo_abono() -> None:
     """
 
     st.session_state["dialogo_abono_abierto"] = False
+    st.session_state.pop(CLAVE_CLIENTE_ABONO, None)
 
 
 @dataclass(frozen=True)
@@ -346,8 +357,8 @@ def _customer_options(
     options: dict[str, str] = {}
     seen: set[str] = set()
     for invoice in invoices:
-        name = str(invoice["cliente"]).strip()
-        key = name.casefold()
+        name = " ".join(str(invoice["cliente"]).split())
+        key = clave_nombre(name)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -537,7 +548,7 @@ def _filter_rows(
         rows = [
             row
             for row in rows
-            if str(row["cliente"]).strip().casefold() in selected_customers
+            if clave_nombre(row["cliente"]) in selected_customers
         ]
     if filters.states:
         rows = [row for row in rows if row["estado"] in filters.states]
@@ -556,8 +567,8 @@ def _customer_debt_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
     for row in rows:
         if int(row["saldo_cop"]) <= 0:
             continue
-        name = str(row["cliente"]).strip()
-        key = name.casefold()
+        name = " ".join(str(row["cliente"]).split())
+        key = clave_nombre(name)
         customer = grouped.setdefault(
             key,
             {
@@ -701,7 +712,7 @@ def _render_customer_detail(
     if requested is not None:
         match = next(
             (label for label in labels
-             if label.casefold() == str(requested).strip().casefold()),
+             if clave_nombre(label) == clave_nombre(requested)),
             None,
         )
         if match is not None:
@@ -729,7 +740,7 @@ def _render_customer_detail(
     selected_name = options[selected_label]
     rows = [
         row for row in invoices
-        if str(row["cliente"]).strip().casefold() == selected_name
+        if clave_nombre(row["cliente"]) == selected_name
     ]
     by_company: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -827,6 +838,7 @@ def _render_tax_control(
         configured_value = st.number_input(
             f"{label} (COP)",
             min_value=0,
+            max_value=MAXIMO_COP,
             value=existing_amount if existing_amount is not None else int(defaults["value"]),
             step=1_000,
             format="%d",
@@ -863,8 +875,12 @@ def _render_subtotal_input(
     *,
     label: str = "Subtotal (COP)",
     placeholder: str = "1.500.000",
+    vacio_es_cero: bool = False,
 ) -> int | None:
-    """Muestra un importe colombiano y devuelve pesos enteros validados."""
+    """Muestra un importe colombiano y devuelve pesos enteros validados.
+
+    ``vacio_es_cero`` es para los campos opcionales: dejarlos en blanco es 0.
+    """
 
     if key not in st.session_state:
         st.session_state[key] = f"{initial:,}".replace(",", ".")
@@ -879,11 +895,32 @@ def _render_subtotal_input(
         on_change=_format_subtotal_input,
         args=(key,),
     )
+    if vacio_es_cero and not raw.strip():
+        return 0
     try:
-        return parse_cop(raw)
+        amount = parse_cop(raw)
     except ValueError as exc:
         st.error(str(exc))
         return None
+    if amount > MAXIMO_COP:
+        st.error(
+            "El valor es demasiado grande: el máximo que se puede guardar es "
+            f"{format_currency(MAXIMO_COP)}. Revisa si sobran ceros."
+        )
+        return None
+    return amount
+
+
+def _warn_total_too_big(total: int) -> bool:
+    """Avisa si el total no cabe en la base; ``True`` bloquea el guardado."""
+
+    if total <= MAXIMO_COP:
+        return False
+    st.error(
+        "El total a cobrar es demasiado grande: el máximo que se puede guardar es "
+        f"{format_currency(MAXIMO_COP)}. Revisa si sobran ceros."
+    )
+    return True
 
 
 def _sync_invoice_company() -> None:
@@ -973,12 +1010,14 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                     "factura_descuento",
                     label="Descuento (COP)",
                     placeholder="0",
+                    vacio_es_cero=True,
                 )
             with amount_columns[2]:
                 initial_payment_value = _render_subtotal_input(
                     "factura_abono_monto",
                     label="Abono ya recibido (COP) · opcional",
                     placeholder="0",
+                    vacio_es_cero=True,
                 )
             subtotal = subtotal_value or 0
             descuento = descuento_value or 0
@@ -1024,6 +1063,7 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 if subtotal_value is not None and descuento_value is not None
                 else "—",
             )
+            total_too_big = _warn_total_too_big(total)
             if descuento:
                 st.caption(
                     f"Incluye un descuento de {format_currency(descuento)}. "
@@ -1056,6 +1096,7 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                         or initial_payment_value is None
                         or initial_payment > total
                         or payment_date is None
+                        or total_too_big
                     ),
                 )
             else:
@@ -1067,6 +1108,7 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                         subtotal_value is None
                         or descuento_value is None
                         or initial_payment_value is None
+                        or total_too_big
                     ),
                 )
         if save_invoice or save_with_payment:
@@ -1105,7 +1147,7 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
             except db.ErrorCartera as exc:
                 st.error(str(exc))
             else:
-                st.success(
+                _avisar(
                     "Factura y abono registrados."
                     if save_with_payment else "Factura registrada."
                 )
@@ -1130,8 +1172,8 @@ def _render_quick_edit(
     with container:
         render_section(
             "Ajustes rápidos",
-            "Corrige el número, las fechas, el detalle, las placas o los impuestos "
-            "sin salir de la cartera.",
+            "Corrige el cliente, el número, las fechas, el detalle, las placas o "
+            "los impuestos sin salir de la cartera.",
         )
         if invoice_id is None:
             by_label = {invoice_label(row): row for row in rows}
@@ -1184,6 +1226,26 @@ def _render_quick_edit(
                     ),
                     key=f"editar_factura_{invoice['id']}_vencimiento",
                 )
+            current_customer = " ".join(str(invoice["cliente"]).split())
+            customer_names = {clave_nombre(name): name for name in db.listar_nombres_clientes()}
+            customer_names[clave_nombre(current_customer)] = current_customer
+            customer_options = sorted(customer_names.values(), key=str.casefold)
+            has_payments = int(invoice["abonos_cop"]) > 0
+            customer_value = st.selectbox(
+                "Cliente · Razón social",
+                customer_options,
+                index=customer_options.index(current_customer),
+                accept_new_options=True,
+                filter_mode="fuzzy",
+                disabled=has_payments,
+                help="Si la factura quedó a nombre de otro cliente, elige el correcto o escribe uno nuevo.",
+                key=f"editar_factura_{invoice['id']}_cliente",
+            )
+            if has_payments:
+                st.caption(
+                    "El cliente no se puede cambiar porque esta factura ya tiene abonos: "
+                    "esos pagos quedaron registrados a nombre de este cliente."
+                )
             editor_data = pd.DataFrame(
                 [
                     {
@@ -1210,6 +1272,7 @@ def _render_quick_edit(
                 int(invoice["descuento_cop"]),
                 label="Descuento (COP)",
                 placeholder="0",
+                vacio_es_cero=True,
             )
         edited_row = edited.iloc[0].to_dict()
         subtotal = subtotal_value or 0
@@ -1240,41 +1303,49 @@ def _render_quick_edit(
             if subtotal_value is not None and descuento_value is not None
             else "—",
         )
-        actions = st.columns([1, 1])
+        total_too_big = _warn_total_too_big(total)
+        actions = st.columns([1, 1], vertical_alignment="bottom")
         with actions[0]:
             if st.button(
                 "Guardar cambios", type="primary", width="stretch",
-                disabled=subtotal_value is None or descuento_value is None,
+                disabled=subtotal_value is None or descuento_value is None or total_too_big,
             ):
+                changes = {
+                    "numero": number_value,
+                    "fecha": issue_value,
+                    "vencimiento": due_value,
+                    "descripcion": edited_row["Detalle del servicio"],
+                    "placas": edited_row["Placas"],
+                    "subtotal_cop": subtotal,
+                    "descuento_cop": descuento,
+                    **{f"{component}_cop": amount for component, amount in amounts.items()},
+                    "impuestos_config": configurations,
+                }
+                if not has_payments:
+                    changes["cliente"] = customer_value
                 try:
-                    db.actualizar_campos_factura(
-                        int(invoice["id"]),
-                        {
-                            "numero": number_value,
-                            "fecha": issue_value,
-                            "vencimiento": due_value,
-                            "descripcion": edited_row["Detalle del servicio"],
-                            "placas": edited_row["Placas"],
-                            "subtotal_cop": subtotal,
-                            "descuento_cop": descuento,
-                            **{f"{component}_cop": amount for component, amount in amounts.items()},
-                            "impuestos_config": configurations,
-                        },
-                    )
+                    db.actualizar_campos_factura(int(invoice["id"]), changes)
                 except db.ErrorCartera as exc:
                     st.error(str(exc))
                 else:
-                    st.success("Cambios guardados.")
+                    _avisar("Cambios guardados.")
                     _cerrar_dialogo_edicion()
                     st.rerun()
         with actions[1]:
-            if st.button("Anular factura", width="stretch"):
+            st.caption(
+                "Anular no se puede deshacer: la factura sale de la cartera y su número queda ocupado."
+            )
+            confirm_void = st.checkbox(
+                "Sí, anular definitivamente",
+                key=f"editar_factura_{invoice['id']}_confirmar_anulacion",
+            )
+            if st.button("Anular factura", width="stretch", disabled=not confirm_void) and confirm_void:
                 try:
                     db.anular_factura(int(invoice["id"]))
                 except db.ErrorCartera as exc:
                     st.error(str(exc))
                 else:
-                    st.success("Factura anulada. El registro continúa en auditoría.")
+                    _avisar("Factura anulada. El registro continúa en auditoría.")
                     _cerrar_dialogo_edicion()
                     st.rerun()
 
@@ -1290,6 +1361,9 @@ def render_manual_portfolio(
         company: Código de empresa o ``TODAS``.
     """
 
+    notice = st.session_state.pop(CLAVE_AVISO, None)
+    if notice:
+        st.toast(notice, duration="long")
     refresh_column, export_column, _ = st.columns([1.2, 1.4, 3.4])
     with refresh_column:
         refreshed = st.button("Actualizar datos", key="actualizar_manual", width="stretch")
@@ -1334,15 +1408,26 @@ def render_manual_portfolio(
                 "Valores en pesos colombianos, sin centavos."
             )
         else:
+            # En la nube está la cartera real: allí nunca se ofrece la muestra.
+            demo_available = db.admite_demostracion() and not db.hay_datos()
             st.markdown(
                 '<div class="empty-state"><strong>No hay facturas para este filtro.</strong><br>'
-                'Registra una factura nueva o carga una muestra para conocer el flujo.</div>',
+                + (
+                    "Registra una factura nueva o carga una muestra para conocer el flujo."
+                    if demo_available
+                    else "Registra una factura nueva o revisa los filtros."
+                )
+                + "</div>",
                 unsafe_allow_html=True,
             )
-            if not db.hay_datos() and st.button("Cargar datos de demostración"):
-                db.cargar_datos_demostracion()
-                st.success("Muestra cargada. Puedes editarla, registrar abonos y revisar la conciliación.")
-                st.rerun()
+            if demo_available and st.button("Cargar datos de demostración"):
+                try:
+                    db.cargar_datos_demostracion()
+                except db.ErrorCartera as exc:
+                    st.error(str(exc))
+                else:
+                    _avisar("Muestra cargada. Puedes editarla, registrar abonos y revisar la conciliación.")
+                    st.rerun()
     with customers_tab:
         clicked_customer = _render_customer_debt(
             company, filtered
@@ -1383,6 +1468,9 @@ def show_payment_dialog() -> None:
 
     # Preselección desde el detalle del cliente: empresa y cliente ya elegidos.
     preselection = st.session_state.pop("abono_preseleccion", None)
+    if "abono_cliente" not in st.session_state:
+        # Apertura nueva: no se arrastra el cliente de un abono anterior.
+        st.session_state.pop(CLAVE_CLIENTE_ABONO, None)
     preferred_company = st.session_state.get("empresa_activa", TODAS)
     available_companies = (
         [preferred_company] if preferred_company != TODAS else list(EMPRESAS)
@@ -1398,26 +1486,52 @@ def show_payment_dialog() -> None:
             lambda code: f"{EMPRESAS[code]['prefijo']} · {EMPRESAS[code]['nombre']}"
         ),
         key="abono_empresa",
+        on_change=lambda: st.session_state.pop(CLAVE_CLIENTE_ABONO, None),
     )
-    customers = db.clientes_con_saldo(company)
+    customers = {int(row["cliente_id"]): row for row in db.clientes_con_saldo(company)}
+    if preselection and preselection.get("empresa") == company:
+        wanted = int(preselection["cliente_id"])
+        if wanted in customers:
+            st.session_state["abono_cliente"] = wanted
+        st.session_state[CLAVE_CLIENTE_ABONO] = wanted
+    chosen_before = st.session_state.get(CLAVE_CLIENTE_ABONO)
+    # Otra sesión pudo saldar al cliente: nunca se pasa en silencio a otro.
+    lost_customer = chosen_before is not None and chosen_before not in customers
+    lost_message = (
+        "El cliente que habías elegido ya no tiene saldo pendiente en esta empresa. "
+        "Es posible que alguien haya registrado un pago o cambiado sus facturas "
+        "mientras este cuadro estaba abierto. No se registró nada: revisa la "
+        "cartera y vuelve a elegir el cliente."
+    )
     if not customers:
-        st.info("Esta empresa no tiene facturas con saldo pendiente.")
+        if lost_customer:
+            st.warning(lost_message)
+        else:
+            st.info("Esta empresa no tiene facturas con saldo pendiente.")
         return
-    customer_options = {
-        f"{row['cliente']} · {format_currency(row['saldo_cop'])}": row
-        for row in customers
-    }
-    customer_index = 0
-    if preselection:
-        customer_index = next(
-            (position for position, row in enumerate(customers)
-             if int(row["cliente_id"]) == int(preselection.get("cliente_id", -1))),
-            0,
-        )
-    customer_label = st.selectbox(
-        "Cliente", list(customer_options), index=customer_index, key="abono_cliente"
+    # Opción = id y etiqueta sin saldo: la selección sobrevive a un cambio de saldo.
+    customer_id = st.selectbox(
+        "Cliente",
+        list(customers),
+        index=None,
+        format_func=lambda option: (
+            str(customers[option]["cliente"]) if option in customers else "Cliente sin saldo"
+        ),
+        placeholder="Elige el cliente que hizo el pago",
+        key="abono_cliente",
     )
-    customer = customer_options[customer_label]
+    if customer_id is None:
+        if lost_customer:
+            st.warning(lost_message)
+        else:
+            st.caption("Elige el cliente para ver sus facturas pendientes.")
+        return
+    st.session_state[CLAVE_CLIENTE_ABONO] = customer_id
+    customer = customers[customer_id]
+    st.caption(
+        f"Saldo pendiente: {format_currency(customer['saldo_cop'])} "
+        f"en {customer['facturas_pendientes']} factura(s)."
+    )
     information, payment = st.columns([1, 1])
     with information:
         date = st.date_input("Fecha del pago", value=hoy_colombia(), key="abono_fecha")
@@ -1430,6 +1544,7 @@ def show_payment_dialog() -> None:
         amount = st.number_input(
             "Monto recibido",
             min_value=0,
+            max_value=MAXIMO_COP,
             value=0,
             step=1_000,
             format="%d",
@@ -1469,7 +1584,9 @@ def show_payment_dialog() -> None:
             width="stretch",
             disabled=["Factura", "Fecha", "Saldo actual", "_id"],
             column_config={
-                "Aplicar (COP)": st.column_config.NumberColumn(min_value=0, step=1_000),
+                "Aplicar (COP)": st.column_config.NumberColumn(
+                    min_value=0, max_value=MAXIMO_COP, step=1_000
+                ),
                 "_id": None,
             },
             key=f"abono_manual_{company}_{customer['cliente_id']}",
@@ -1526,7 +1643,7 @@ def show_payment_dialog() -> None:
         except db.ErrorCartera as exc:
             st.error(str(exc))
         else:
-            st.success("Abono aplicado y registrado en auditoría.")
+            _avisar("Abono aplicado y registrado en auditoría.")
             _cerrar_dialogo_abono()
             st.rerun()
 

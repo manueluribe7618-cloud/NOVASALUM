@@ -19,6 +19,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from src import database as db
+from src.formato import hoy_colombia
 from src.views import manual
 
 
@@ -149,6 +150,108 @@ class LaEdicionSobreviveAlRerun(unittest.TestCase):
         self.assertIn("FEBA5001", ficha)
         self.assertIn("Detalle original", ficha)
         self.assertIn("ABC123", ficha)
+
+
+class ElAbonoNuncaCambiaDeClienteEnSilencio(unittest.TestCase):
+    """Mientras el diálogo está abierto, otra sesión puede mover los saldos.
+
+    Antes la opción era «nombre · saldo»: si el saldo cambiaba, Streamlit
+    volvía sin avisar a la primera opción, el mayor deudor, y el abono quedaba
+    en otro cliente sin forma de reversarlo.
+    """
+
+    GUION = (
+        "from src.views.manual import show_payment_dialog\n"
+        "show_payment_dialog()\n"
+    )
+
+    def setUp(self) -> None:
+        self.temporal = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporal.cleanup)
+        ruta = Path(self.temporal.name) / "cartera.db"
+        entorno = patch.dict("os.environ", {"NOVASALUM_DB": str(ruta)})
+        entorno.start()
+        self.addCleanup(entorno.stop)
+        facturas = {}
+        for numero, cliente, subtotal in (
+            ("10", "Alfa Mayor SAS", 50_000_000),
+            ("20", "Beta Pequena SAS", 5_000_000),
+        ):
+            facturas[cliente] = db.crear_factura(
+                {
+                    "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": numero,
+                    "fecha": hoy_colombia(), "cliente": cliente, "subtotal_cop": subtotal,
+                }
+            )
+        self.alfa_factura = facturas["Alfa Mayor SAS"]
+        self.beta_factura = facturas["Beta Pequena SAS"]
+        self.beta = int(db.obtener_factura(self.beta_factura)["cliente_id"])
+
+    def abrir(self, **sesion) -> AppTest:
+        app = AppTest.from_string(self.GUION)
+        app.session_state["empresa_activa"] = "NOVASA"
+        for clave, valor in sesion.items():
+            app.session_state[clave] = valor
+        app.run()
+        self.assertFalse(app.exception)
+        return app
+
+    def elegir_beta_y_escribir_pago(self, app: AppTest) -> None:
+        app.selectbox(key="abono_cliente").set_value(self.beta).run()
+        app.number_input(key="abono_monto").set_value(1_000_000)
+        app.text_input(key="abono_referencia").input("TRANSF-BETA-1").run()
+        self.assertFalse(app.exception)
+
+    def abonar_a_beta_desde_otra_sesion(self, monto: int) -> None:
+        db.registrar_abono(
+            empresa_codigo="NOVASA", cliente_id=self.beta, fecha=hoy_colombia(),
+            referencia="OTRA-SESION", monto_cop=monto,
+            aplicaciones=[{"factura_id": self.beta_factura, "monto_cop": monto}],
+        )
+
+    def aplicar(self, app: AppTest) -> None:
+        next(boton for boton in app.button if boton.label == "Aplicar abono").click().run()
+        self.assertFalse(app.exception)
+
+    def test_sin_preseleccion_no_queda_elegido_el_mayor_deudor(self) -> None:
+        app = self.abrir()
+        self.assertIsNone(app.selectbox(key="abono_cliente").value)
+        self.assertFalse(any(boton.label == "Aplicar abono" for boton in app.button))
+
+    def test_la_preseleccion_del_detalle_elige_a_ese_cliente(self) -> None:
+        app = self.abrir(abono_preseleccion={"empresa": "NOVASA", "cliente_id": self.beta})
+        self.assertEqual(app.selectbox(key="abono_cliente").value, self.beta)
+
+    def test_si_el_saldo_cambia_el_abono_sigue_en_el_cliente_elegido(self) -> None:
+        app = self.abrir()
+        self.elegir_beta_y_escribir_pago(app)
+        self.abonar_a_beta_desde_otra_sesion(500_000)
+        self.aplicar(app)
+        abono = next(a for a in db.listar_abonos() if a["referencia"] == "TRANSF-BETA-1")
+        self.assertEqual(abono["cliente"], "Beta Pequena SAS")
+        self.assertEqual(db.obtener_factura(self.alfa_factura)["abonos_cop"], 0)
+        self.assertEqual(
+            app.session_state["aviso_manual"], "Abono aplicado y registrado en auditoría."
+        )
+
+    def comprobar_que_un_cliente_saldado_no_recibe_el_abono(self, *, fifo: bool) -> None:
+        app = self.abrir()
+        self.elegir_beta_y_escribir_pago(app)
+        if not fifo:
+            app.toggle(key="abono_fifo").set_value(False).run()
+        self.abonar_a_beta_desde_otra_sesion(5_000_000)
+        self.aplicar(app)
+        self.assertIn("ya no tiene saldo", " ".join(aviso.value for aviso in app.warning))
+        self.assertFalse(any(boton.label == "Aplicar abono" for boton in app.button))
+        self.assertEqual(
+            [a["referencia"] for a in db.listar_abonos()], ["OTRA-SESION"]
+        )
+
+    def test_abono_general_a_un_cliente_que_quedo_sin_saldo_no_se_registra(self) -> None:
+        self.comprobar_que_un_cliente_saldado_no_recibe_el_abono(fifo=True)
+
+    def test_abono_especifico_a_un_cliente_que_quedo_sin_saldo_no_se_registra(self) -> None:
+        self.comprobar_que_un_cliente_saldado_no_recibe_el_abono(fifo=False)
 
 
 class LaSesionQuedaLimpiaAlSalir(unittest.TestCase):

@@ -44,3 +44,13 @@ class HoyColombiaTests(unittest.TestCase):
 
         with mock.patch.object(formato.dt, "datetime", Reloj):
             self.assertEqual(formato.hoy_colombia(), dt.date(2026, 9, 29))
+
+
+class ClaveNombreTests(unittest.TestCase):
+    def test_ignora_mayusculas_tildes_en_mayuscula_y_espacios_repetidos(self) -> None:
+        self.assertEqual(formato.clave_nombre("  ACME   Andina sas "), "acme andina sas")
+        self.assertEqual(
+            formato.clave_nombre("CONSTRUCCIÓN ÁVILA"),
+            formato.clave_nombre("Construcción Ávila"),
+        )
+        self.assertEqual(formato.clave_nombre(None), "")

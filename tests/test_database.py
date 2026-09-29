@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import date, timedelta
+import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from src import database as db
+from src.formato import hoy_colombia
 
 
 class CarteraManualTests(unittest.TestCase):
@@ -381,6 +386,258 @@ class CarteraManualTests(unittest.TestCase):
             db.listar_nombres_clientes(self.ruta),
             ["Alimentos de prueba SAS", "Cliente de prueba SAS"],
         )
+
+    def editar_con_cliente(self, factura: int, cliente: str) -> None:
+        db.actualizar_campos_factura(
+            factura,
+            {
+                "cliente": cliente,
+                "descripcion": "Servicio de prueba",
+                "placas": "ABC123",
+                "subtotal_cop": 100_000,
+                "iva_cop": 0,
+                "retefuente_cop": 0,
+                "ica_cop": 0,
+            },
+            self.ruta,
+        )
+
+    def test_editar_corrige_el_cliente_si_la_factura_no_tiene_abonos(self) -> None:
+        factura = self.crear_factura("900", self.hoy)
+        anterior = db.obtener_factura(factura, self.ruta)["cliente_id"]
+
+        self.editar_con_cliente(factura, "Cliente Correcto SAS")
+
+        editada = db.obtener_factura(factura, self.ruta)
+        self.assertEqual(editada["cliente"], "Cliente Correcto SAS")
+        self.assertNotEqual(editada["cliente_id"], anterior)
+        evento = db.resumen_actividad(1, self.ruta)[0]
+        self.assertEqual(evento["accion"], "ACTUALIZADA")
+        detalle = json.loads(evento["detalle"])
+        self.assertEqual(detalle["cliente_id_antes"], anterior)
+        self.assertEqual(detalle["cliente_id_despues"], editada["cliente_id"])
+
+    def test_editar_no_cambia_el_cliente_de_una_factura_con_abonos(self) -> None:
+        factura = self.crear_factura("901", self.hoy)
+        db.registrar_abono(
+            empresa_codigo="NOVASA", cliente_id=1, fecha=self.hoy, referencia="PAGO",
+            monto_cop=10_000, aplicaciones=[{"factura_id": factura, "monto_cop": 10_000}],
+            ruta=self.ruta,
+        )
+
+        with self.assertRaises(db.ErrorCartera) as contexto:
+            self.editar_con_cliente(factura, "Cliente Correcto SAS")
+        self.assertIn("abonos", str(contexto.exception))
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["cliente"], "Cliente de prueba SAS")
+        # Escribir la misma razón social con otra grafía no es un cambio.
+        self.editar_con_cliente(factura, "CLIENTE  DE PRUEBA sas")
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["cliente_id"], 1)
+
+    def test_un_importe_que_no_cabe_en_la_nube_se_rechaza_con_un_mensaje(self) -> None:
+        """Supabase guarda el dinero en INTEGER: el tope es 2.147.483.647 pesos."""
+
+        datos = {
+            "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": "910",
+            "fecha": self.hoy, "cliente": "Cliente de prueba SAS",
+            "iva_cop": 0, "retefuente_cop": 0, "ica_cop": 0,
+        }
+        for subtotal in (2_147_483_648, 10**22):
+            with self.subTest(subtotal=subtotal):
+                with self.assertRaises(db.ErrorCartera) as contexto:
+                    db.crear_factura({**datos, "subtotal_cop": subtotal}, self.ruta)
+                self.assertIn("demasiado grande", str(contexto.exception))
+        with self.assertRaises(db.ErrorCartera) as contexto:
+            db.crear_factura(
+                {**datos, "subtotal_cop": 2_000_000_000, "iva_cop": 380_000_000}, self.ruta
+            )
+        self.assertIn("total", str(contexto.exception))
+        self.assertEqual(db.listar_facturas(ruta=self.ruta), [])
+
+        factura = db.crear_factura({**datos, "subtotal_cop": 2_147_483_647}, self.ruta)
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["total_cop"], 2_147_483_647)
+        with self.assertRaises(db.ErrorCartera):
+            db.actualizar_campos_factura(
+                factura, {**datos, "subtotal_cop": 2_147_483_648}, self.ruta
+            )
+        with self.assertRaises(db.ErrorCartera):
+            db.registrar_abono(
+                empresa_codigo="NOVASA", cliente_id=1, fecha=self.hoy, referencia="X",
+                monto_cop=2_500_000_000, aplicaciones=[], ruta=self.ruta,
+            )
+        self.assertEqual(db.listar_abonos(ruta=self.ruta), [])
+
+
+class UnMismoClienteNoSeDuplica(unittest.TestCase):
+    """La misma razón social con otras mayúsculas o espacios es el mismo cliente."""
+
+    def setUp(self) -> None:
+        self.temporal = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporal.cleanup)
+        self.ruta = Path(self.temporal.name) / "cartera.db"
+        self.hoy = hoy_colombia()
+        db.inicializar(self.ruta)
+
+    def factura(self, empresa: str, numero: str, cliente: str, subtotal: int = 100_000) -> int:
+        return db.crear_factura(
+            {
+                "empresa_codigo": empresa,
+                "prefijo": db.EMPRESAS[empresa]["prefijo"],
+                "numero": numero,
+                "fecha": self.hoy,
+                "cliente": cliente,
+                "subtotal_cop": subtotal,
+            },
+            self.ruta,
+        )
+
+    def cliente_id(self, factura: int) -> int:
+        return int(db.obtener_factura(factura, self.ruta)["cliente_id"])
+
+    def test_otra_grafia_en_la_misma_empresa_es_el_mismo_cliente(self) -> None:
+        primera = self.factura("LUAC", "1", "Transportes Andinos SAS", 300_000)
+        segunda = self.factura("LUAC", "2", "  TRANSPORTES   ANDINOS sas ", 200_000)
+        tildes = self.factura("LUAC", "3", "CONSTRUCCIÓN ÁVILA SAS")
+        otra_tilde = self.factura("LUAC", "4", "Construcción Ávila SAS")
+
+        self.assertEqual(self.cliente_id(primera), self.cliente_id(segunda))
+        self.assertEqual(self.cliente_id(tildes), self.cliente_id(otra_tilde))
+        clientes = db.clientes_con_saldo("LUAC", self.ruta)
+        andinos = next(c for c in clientes if c["cliente"] == "Transportes Andinos SAS")
+        self.assertEqual(andinos["saldo_cop"], 500_000)
+        self.assertEqual(
+            len(db.facturas_pendientes_cliente("LUAC", andinos["cliente_id"], self.ruta)), 2
+        )
+
+    def test_un_cliente_nuevo_se_guarda_sin_espacios_repetidos(self) -> None:
+        factura = self.factura("MSU", "1", "Acme   Andina  SAS")
+        self.assertEqual(db.obtener_factura(factura, self.ruta)["cliente"], "Acme Andina SAS")
+        self.assertEqual(db.listar_nombres_clientes(self.ruta), ["Acme Andina SAS"])
+
+    def test_cada_empresa_conserva_su_propio_cliente(self) -> None:
+        novasa = self.factura("NOVASA", "1", "Acme SAS")
+        luac = self.factura("LUAC", "1", "ACME SAS")
+        self.assertNotEqual(self.cliente_id(novasa), self.cliente_id(luac))
+        self.assertEqual(db.listar_nombres_clientes(self.ruta), ["Acme SAS"])
+
+
+class LosClientesRepetidosSeUnenAlIniciar(unittest.TestCase):
+    """Una base que ya tiene el cliente partido se arregla sola en inicializar."""
+
+    def setUp(self) -> None:
+        self.temporal = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporal.cleanup)
+        self.ruta = Path(self.temporal.name) / "cartera.db"
+        self.hoy = hoy_colombia()
+        datos = {"fecha": self.hoy, "subtotal_cop": 1_000_000}
+        self.lua1 = db.crear_factura(
+            {**datos, "empresa_codigo": "LUAC", "prefijo": "LUA", "numero": "1",
+             "cliente": "Obras y Maquinaria SAS"},
+            self.ruta,
+        )
+        self.lua2 = db.crear_factura(
+            {**datos, "empresa_codigo": "LUAC", "prefijo": "LUA", "numero": "2",
+             "cliente": "Temporal SAS"},
+            self.ruta,
+        )
+        self.feba = db.crear_factura(
+            {**datos, "empresa_codigo": "NOVASA", "prefijo": "FEBA", "numero": "1",
+             "cliente": "Solitario  SAS"},
+            self.ruta,
+        )
+        self.original = int(db.obtener_factura(self.lua1, self.ruta)["cliente_id"])
+        self.repetido = int(db.obtener_factura(self.lua2, self.ruta)["cliente_id"])
+        db.registrar_abono(
+            empresa_codigo="LUAC", cliente_id=self.repetido, fecha=self.hoy,
+            referencia="PAGO-PARCIAL", monto_cop=400_000,
+            aplicaciones=[{"factura_id": self.lua2, "monto_cop": 400_000}],
+            ruta=self.ruta,
+        )
+        # Así quedaban las bases antes: el mismo cliente con otra grafía.
+        with closing(sqlite3.connect(self.ruta)) as conexion:
+            conexion.execute(
+                "UPDATE clientes SET nombre = 'OBRAS  Y MAQUINARIA SAS' WHERE id = ?",
+                (self.repetido,),
+            )
+            conexion.execute(
+                "UPDATE clientes SET nombre = 'Solitario  SAS' WHERE empresa_codigo = 'NOVASA'"
+            )
+            conexion.commit()
+
+    def filas(self, sql: str) -> list[tuple]:
+        with closing(sqlite3.connect(self.ruta)) as conexion:
+            return conexion.execute(sql).fetchall()
+
+    def test_une_facturas_y_abonos_en_el_cliente_mas_antiguo(self) -> None:
+        db.inicializar(self.ruta)
+
+        self.assertEqual(
+            self.filas("SELECT id, nombre FROM clientes WHERE empresa_codigo = 'LUAC'"),
+            [(self.original, "Obras y Maquinaria SAS")],
+        )
+        self.assertEqual(
+            self.filas("SELECT DISTINCT cliente_id FROM facturas_manual WHERE empresa_codigo = 'LUAC'"),
+            [(self.original,)],
+        )
+        self.assertEqual(self.filas("SELECT cliente_id FROM abonos_manual"), [(self.original,)])
+        # Los espacios repetidos también se corrigen, sin tocar otras empresas.
+        self.assertEqual(
+            self.filas("SELECT nombre FROM clientes WHERE empresa_codigo = 'NOVASA'"),
+            [("Solitario SAS",)],
+        )
+        unificados = self.filas(
+            "SELECT entidad_id, detalle FROM auditoria WHERE accion = 'UNIFICADO' ORDER BY id"
+        )
+        self.assertEqual(unificados[0][0], str(self.original))
+        self.assertEqual(json.loads(unificados[0][1])["ids_unidos"], [self.repetido])
+
+    def test_abono_aqui_alcanza_todas_las_facturas_del_cliente(self) -> None:
+        clientes = db.clientes_con_saldo("LUAC", self.ruta)
+        self.assertEqual(len(clientes), 1)
+        self.assertEqual(clientes[0]["saldo_cop"], 1_600_000)
+        pendientes = db.facturas_pendientes_cliente("LUAC", clientes[0]["cliente_id"], self.ruta)
+        self.assertEqual({f["id"] for f in pendientes}, {self.lua1, self.lua2})
+        aplicaciones, sobrante = db.previsualizar_fifo(pendientes, 1_600_000)
+        db.registrar_abono(
+            empresa_codigo="LUAC", cliente_id=clientes[0]["cliente_id"], fecha=self.hoy,
+            referencia="PAGO-TOTAL", monto_cop=1_600_000, aplicaciones=aplicaciones,
+            ruta=self.ruta,
+        )
+        self.assertEqual(sobrante, 0)
+        self.assertEqual(db.clientes_con_saldo("LUAC", self.ruta), [])
+
+    def test_volver_a_iniciar_no_repite_nada(self) -> None:
+        db.inicializar(self.ruta)
+        antes = self.filas("SELECT COUNT(*) FROM auditoria")
+        db.inicializar(self.ruta)
+        self.assertEqual(self.filas("SELECT COUNT(*) FROM auditoria"), antes)
+
+
+class DatosDeDemostracion(unittest.TestCase):
+    def test_en_la_nube_la_muestra_no_se_puede_cargar(self) -> None:
+        nube = {"SUPABASE_DB_URL": "postgresql://u:p@host/db", "NOVASALUM_DB": ""}
+        with patch.dict("os.environ", nube), \
+                patch.object(db, "_conexion_pg", side_effect=AssertionError("sin red")):
+            self.assertFalse(db.admite_demostracion())
+            with self.assertRaises(db.ErrorCartera) as contexto:
+                db.cargar_datos_demostracion()
+        self.assertIn("nube", str(contexto.exception))
+
+    def test_la_muestra_local_no_ocupa_numeros_reales(self) -> None:
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta = Path(carpeta) / "cartera.db"
+            self.assertTrue(db.admite_demostracion(ruta))
+            db.cargar_datos_demostracion(ruta)
+            self.assertEqual({f["prefijo"] for f in db.listar_facturas(ruta=ruta)}, {"DEMO"})
+            with self.assertRaises(db.ErrorCartera):
+                db.cargar_datos_demostracion(ruta)
+            for empresa, prefijo, numero in (("LUAC", "LUA", "208"), ("NOVASA", "FEBA", "1079")):
+                db.crear_factura(
+                    {"empresa_codigo": empresa, "prefijo": prefijo, "numero": numero,
+                     "fecha": hoy_colombia(), "cliente": "Cliente real SAS",
+                     "subtotal_cop": 100_000},
+                    ruta,
+                )
+            self.assertEqual(len(db.listar_facturas(ruta=ruta)), 7)
 
 
 if __name__ == "__main__":
