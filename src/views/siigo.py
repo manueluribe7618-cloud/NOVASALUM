@@ -591,11 +591,20 @@ def render_siigo_portfolio(company: str) -> None:
         marca = reporte.leido_en.strftime("%d/%m/%Y %H:%M") if reporte.leido_en else "sin fecha"
         st.caption(f"{len(export_rows)} facturas. Origen: {reporte.origen}. Última lectura: {marca}.")
         source_note = f"Fuente: Siigo ({reporte.origen}). Lectura: {marca}."
+        consultadas = None
+        if reporte.parametros:
+            source_note += (f" Período: {reporte.parametros.desde:%d/%m/%Y} a {reporte.parametros.hasta:%d/%m/%Y}."
+                            f" Empresas consultadas: {', '.join(reporte.parametros.empresas)}.")
+            # Una clave de error igual al código de la empresa significa que esa empresa no se leyó.
+            consultadas = set(reporte.parametros.empresas) - set(reporte.errores)
+        else:
+            source_note += " Son datos de demostración, no una lectura real de Siigo."
         if reporte.errores:
             source_note += " Consulta con incidencias: " + ", ".join(sorted(reporte.errores)) + "."
         if reporte.sin_detalle:
             source_note += f" {reporte.sin_detalle} facturas sin detalle completo en la lectura."
-        render_excel_export(export_rows, source="siigo", scope=scope, source_note=source_note)
+        render_excel_export(export_rows, source="siigo", scope=scope, source_note=source_note,
+                            order=filtros["orden"], empresas_consultadas=consultadas)
     with tarjetas:
         _render_kpis(visibles)
         st.write("")
