@@ -198,6 +198,22 @@ son cosas que ya corrigió antes y que hay que respetar.
 
 ## Despliegue
 
+### Reinicio después de publicar código
+
+El vigilante de archivos de Streamlit está desactivado con
+`server.fileWatcherType = "none"` en `.streamlit/config.toml`. La recarga de
+módulos en caliente puede retirar un módulo mientras otra sesión lo importa
+y provocar un `KeyError` dentro de `importlib` durante el arranque.
+
+Después de subir cambios de código, reinicia NOVASALUM con **Manage app →
+Reboot app**, o con **Reboot** desde su menú en `share.streamlit.io`. El
+reinicio carga todos los módulos de la versión publicada. Actualizar el
+navegador o pulsar «Actualizar datos» no sustituye ese reinicio. Los filtros,
+formularios y botones conservan sus reejecuciones habituales.
+
+Para desarrollar con recarga automática solo en el equipo local se puede usar
+`.venv/bin/python -m streamlit run app.py --server.fileWatcherType=auto`.
+
 Recomendación dada y aceptada: **Streamlit Community Cloud**, con el
 repositorio **privado** y acceso restringido por correo.
 

@@ -7,6 +7,31 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-29 — Mitigación del KeyError intermitente al importar la app
+
+- El dueño reportó `KeyError` en `app.py:8`, al importar `src.app_shell`,
+  terminado dentro de `importlib._load_unlocked`.
+- Se reprodujo localmente ese patrón con el módulo real y el vigilante de
+  archivos de Streamlit 1.60: la recarga de una sesión retira el módulo de
+  `sys.modules` mientras otra sesión todavía lo importa. Un import posterior
+  funciona. Es consistente con el error reportado; no se dispone del registro
+  completo remoto para confirmar qué evento disparó esa instancia.
+- Se desactiva `server.fileWatcherType` en `.streamlit/config.toml`. La
+  aplicación conserva su organización y sus importaciones normales; no se
+  interceptan ni ocultan excepciones de negocio. Se documenta en `ARRANQUE.md`
+  el reinicio del servidor después de publicar código y la opción de recarga
+  automática para desarrollo local.
+- Alcance: configuración de arranque y documentación. Sin cambios en datos,
+  esquema, fórmulas, gráficas, filtros ni flujos de registro y edición.
+- La comprobación en el navegador permitió ingresar y ver las 207 facturas,
+  las gráficas y el saldo de $1.402.177.768 antes de publicar esta mitigación:
+  el error no estaba presente en esa sesión. La aplicación de la nueva
+  configuración requiere reiniciar el servidor de Streamlit Cloud.
+- Validación local: reproducción determinista del `KeyError: 'src.app_shell'`,
+  importación limpia posterior y comprobación de `NoOpPathWatcher` sin módulos
+  vigilados ni eliminaciones pendientes con la configuración nueva. Las 230
+  pruebas de la app pasan; pyflakes y revisión de diferencias sin errores.
+
 ## 2026-09-29 — Revisión de integración y detalle coherente con los filtros
 
 - Pedido del dueño: conservar las gráficas, filtros y mejoras recientes;

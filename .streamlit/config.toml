@@ -1,3 +1,8 @@
+[server]
+# Evita evacuar módulos mientras otra sesión los está importando.
+# Tras publicar cambios de código, reiniciar la app en Streamlit Cloud.
+fileWatcherType = "none"
+
 [theme]
 base = "light"
 primaryColor = "#2563EB"
