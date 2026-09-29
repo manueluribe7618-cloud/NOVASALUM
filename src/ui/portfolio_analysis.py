@@ -13,7 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.formato import parse_cop
+from src.formato import hoy_colombia, parse_cop
 from src.ui.components import EMPRESAS, format_currency
 
 
@@ -48,7 +48,7 @@ def _date(value: Any) -> dt.date | None:
 
 def days_in_portfolio(value: Any, *, today: dt.date | None = None) -> int | None:
     issued = _date(value)
-    return max(0, ((today or dt.date.today()) - issued).days) if issued else None
+    return max(0, ((today or hoy_colombia()) - issued).days) if issued else None
 
 
 def age_range(value: Any, *, today: dt.date | None = None) -> str:

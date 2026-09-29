@@ -23,6 +23,7 @@ from typing import Any
 
 import pandas as pd
 
+from src.formato import ahora_colombia
 from src.cartera_siigo import (
     enriquecer_facturas_clientes,
     facturas_a_dataframe,
@@ -240,7 +241,7 @@ def leer_cartera(
     factura, se conserva lo que dio el listado y se marca como no leída.
     """
 
-    leido_en = ahora or dt.datetime.now().astimezone()
+    leido_en = ahora or ahora_colombia()
     errores: dict[str, str] = {}
     resumenes: list[ResumenEmpresa] = []
     tablas: list[pd.DataFrame] = []
@@ -322,7 +323,7 @@ def reporte_desde_facturas(
     columnas que una lectura real, sin tocar ninguna base de datos.
     """
 
-    leido_en = ahora or dt.datetime.now().astimezone()
+    leido_en = ahora or ahora_colombia()
     tablas = []
     resumenes = []
     for empresa, facturas in facturas_por_empresa.items():

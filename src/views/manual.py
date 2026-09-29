@@ -18,7 +18,7 @@ import streamlit as st
 from st_aggrid import JsCode
 
 from src import database as db
-from src.formato import parse_cop
+from src.formato import hoy_colombia, parse_cop
 from src.taxes import TAX_COMPONENTS, TAX_DEFAULTS, calculate_tax
 from src.ui.grid import render_grid
 from src.ui.portfolio_analysis import (
@@ -940,12 +940,12 @@ def _render_invoice_form(active_company: str, *, use_expander: bool) -> None:
                 ).upper()
             with column_c:
                 issue_date = st.date_input(
-                    "Fecha de emisión", value=dt.date.today(), key="factura_fecha"
+                    "Fecha de emisión", value=hoy_colombia(), key="factura_fecha"
                 )
             with column_d:
                 due_date = st.date_input(
                     "Vencimiento",
-                    value=dt.date.today() + dt.timedelta(days=30),
+                    value=hoy_colombia() + dt.timedelta(days=30),
                     key="factura_vencimiento",
                 )
             customer = st.selectbox(
@@ -1420,7 +1420,7 @@ def show_payment_dialog() -> None:
     customer = customer_options[customer_label]
     information, payment = st.columns([1, 1])
     with information:
-        date = st.date_input("Fecha del pago", value=dt.date.today(), key="abono_fecha")
+        date = st.date_input("Fecha del pago", value=hoy_colombia(), key="abono_fecha")
         reference = st.text_input(
             "Referencia bancaria",
             placeholder="Recibo, transferencia o comprobante",

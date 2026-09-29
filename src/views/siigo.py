@@ -12,7 +12,6 @@ imagen y deben reconocerse como el mismo documento.
 from __future__ import annotations
 
 from collections.abc import Mapping
-import datetime as dt
 import html
 import os
 from typing import Any
@@ -21,6 +20,7 @@ import pandas as pd
 import streamlit as st
 
 from src.cartera_siigo import EMPRESAS_SIIGO
+from src.formato import hoy_colombia
 from src.siigo import (
     ConfiguracionSiigo,
     ErrorConfiguracionSiigo,
@@ -154,7 +154,7 @@ def _formulario_consulta(
     """Panel de consulta. Devuelve los parámetros si se pidió leer Siigo."""
 
     disponibles = list(configuracion.empresas) if configuracion else []
-    hoy = dt.date.today()
+    hoy = hoy_colombia()
     with st.form("consulta_siigo"):
         columna_a, columna_b, columna_c = st.columns([1, 1, 1.6])
         with columna_a:

@@ -18,6 +18,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.formato import hoy_colombia
+
 
 API_VERSION = "2026.08.21.1"
 
@@ -447,7 +449,7 @@ def enriquecer_facturas_clientes(
 def estado_contable(factura: Mapping[str, Any], hoy: dt.date | None = None) -> str:
     """Clasifica usando exclusivamente el saldo explícito entregado por Siigo."""
 
-    hoy = hoy or dt.date.today()
+    hoy = hoy or hoy_colombia()
     if _factura_anulada(factura):
         return "ANULADA"
     saldo = _numero(factura.get("balance"))
@@ -520,7 +522,7 @@ def facturas_a_dataframe(
 ) -> pd.DataFrame:
     """Convierte el JSON paginado de Siigo a una tabla estable para supervisión."""
 
-    hoy = hoy or dt.date.today()
+    hoy = hoy or hoy_colombia()
     codigo = str(empresa_codigo or "").strip().upper()
     empresa = EMPRESAS_SIIGO.get(codigo, codigo)
     filas: list[dict[str, Any]] = []

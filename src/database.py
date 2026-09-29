@@ -19,6 +19,8 @@ import sqlite3
 import threading
 from typing import Any, Iterator, Mapping, Sequence
 
+from src.formato import hoy_colombia
+
 try:  # psycopg solo hace falta cuando los datos viven en Supabase
     import psycopg
     from psycopg.rows import dict_row
@@ -913,7 +915,7 @@ def _filas_facturas(
         GROUP BY f.id, c.id
         ORDER BY f.fecha ASC, f.id ASC
     """
-    hoy = date.today()
+    hoy = hoy_colombia()
     filas: list[dict[str, Any]] = []
     for fila_cruda in conexion.execute(consulta, parametros).fetchall():
         fila = dict(fila_cruda)
@@ -1265,7 +1267,7 @@ def cargar_datos_demostracion(ruta: str | Path | None = None) -> None:
         raise ErrorCartera(
             "La demostración solo se puede cargar en una cartera manual vacía."
         )
-    hoy = date.today()
+    hoy = hoy_colombia()
     muestras = [
         {
             "empresa_codigo": "NOVASA",

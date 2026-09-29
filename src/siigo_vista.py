@@ -20,7 +20,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.formato import fmt_cop
+from src.formato import fmt_cop, hoy_colombia
 
 
 # Estados contables que entrega ``src.cartera_siigo``, más el estado propio de
@@ -142,7 +142,7 @@ def dias_en_cartera(valor: Any, *, hoy: dt.date | None = None) -> int | str:
         fecha = dt.date.fromisoformat(str(valor)[:10])
     except (TypeError, ValueError):
         return "—"
-    return max(0, ((hoy or dt.date.today()) - fecha).days)
+    return max(0, ((hoy or hoy_colombia()) - fecha).days)
 
 
 def etiqueta_estado(fila: Mapping[str, Any]) -> str:

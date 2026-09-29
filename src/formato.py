@@ -5,7 +5,21 @@ proyecto anterior, que traia dependencias de toda la aplicacion de liquidacion.
 """
 from __future__ import annotations
 
+import datetime as dt
 import re
+
+# Colombia no tiene horario de verano; un desfase fijo evita depender de tzdata.
+ZONA_COLOMBIA = dt.timezone(dt.timedelta(hours=-5), "COT")
+
+
+def ahora_colombia() -> dt.datetime:
+    return dt.datetime.now(ZONA_COLOMBIA)
+
+
+def hoy_colombia() -> dt.date:
+    """El día calendario en Colombia; el servidor de la nube corre en UTC."""
+
+    return ahora_colombia().date()
 
 
 def parse_cop(texto: str) -> int:

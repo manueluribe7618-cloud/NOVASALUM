@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
+from src.formato import hoy_colombia
 from src.siigo_lectura import (
     LECTURA_FALLO,
     Reporte,
@@ -88,7 +89,7 @@ def cargar_muestra(hoy: dt.date | None = None) -> Reporte:
     una cuyo detalle no se pudo leer.
     """
 
-    hoy = hoy or dt.date.today()
+    hoy = hoy or hoy_colombia()
     cliente_a = ("TMP Izajes y Transportes S.A.S", "900123456")
     cliente_b = ("Suministros y Transportes ANCA S.A.S", "800999888")
     cliente_c = ("YEGO ECO-T S.A.S PLEXA", "901555222")
