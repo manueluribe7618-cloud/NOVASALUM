@@ -116,10 +116,33 @@ def money_blanco(valor: Any) -> str:
     return fmt_cop(valor, dash_zero=False)
 
 
-def money_kpi(valor: Any) -> str:
-    """Dinero para las tarjetas: un agregado sin datos se lee como raya."""
+def money_kpi(total: float, faltantes: int, filas: int) -> str:
+    """Dinero para los totales: raya solo si ninguna de las filas trae el dato.
 
-    return fmt_cop(valor, dash_zero=True)
+    Un cero que Siigo sí informó (o no tener facturas en pesos) es «$ 0»,
+    igual que en la cartera manual; la raya queda para «no se sabe».
+    """
+
+    if filas and faltantes >= filas:
+        return "—"
+    return money(total)
+
+
+def money_fila(fila: Mapping[str, Any], valor: Any, *, blanco: bool = False) -> str:
+    """Importe de una factura; si no es en pesos, lleva el código de su moneda."""
+
+    if es_cop(fila):
+        return money_blanco(valor) if blanco else money(valor)
+    if es_ausente(valor):
+        return "—"
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return "—"
+    if blanco and numero == 0:
+        return ""
+    moneda = str(fila.get("moneda")).strip().upper()
+    return f"{moneda} {numero:,.0f}".replace(",", ".")
 
 
 def fecha_visible(valor: Any) -> str:
@@ -178,10 +201,10 @@ def _valor(fila: Mapping[str, Any], campo: str) -> Any:
 def _sin_detalle(fila: Mapping[str, Any], campo: str) -> Any:
     """Devuelve el importe solo si la factura se leyó completa.
 
-    Cuando falta el detalle, ``src.cartera_siigo`` entrega 0.0 en los impuestos
-    porque no hay ítems que sumar. Ese cero no es un cero contable: es la
-    ausencia del dato. Mostrarlo como «$ 0» sería afirmar que la factura no
-    tiene IVA, y por eso aquí se convierte en raya.
+    Cuando falta el detalle, ``src.cartera_siigo`` puede entregar 0.0 (en el
+    descuento, por ejemplo) porque no hay ítems que sumar. Ese cero no es un
+    cero contable: es la ausencia del dato. Mostrarlo como «$ 0» sería afirmar
+    algo que nadie leyó, y por eso aquí se convierte en raya.
     """
 
     if not fila.get("lectura_completa", True):
@@ -218,13 +241,13 @@ def tabla_general(filas: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
             "Fecha": fecha_visible(fila.get("fecha")),
             "Cliente": str(fila.get("cliente") or "—"),
             "Detalle del servicio": texto_corto(_sin_detalle(fila, "descripcion_siigo")),
-            "Subtotal": money(_sin_detalle(fila, "subtotal_siigo")),
-            "IVA": money(_sin_detalle(fila, "iva_siigo")),
-            "Retefuente": money(_sin_detalle(fila, "retefuente_siigo")),
-            "ICA": money(_sin_detalle(fila, "reteica_siigo")),
+            "Subtotal": money_fila(fila, _sin_detalle(fila, "subtotal_siigo")),
+            "IVA": money_fila(fila, _sin_detalle(fila, "iva_siigo")),
+            "Retefuente": money_fila(fila, _sin_detalle(fila, "retefuente_siigo")),
+            "ICA": money_fila(fila, _sin_detalle(fila, "reteica_siigo")),
             "Abonos": "",
-            "Descuento": money_blanco(_sin_detalle(fila, "descuento_siigo")),
-            "Saldo": money(_valor(fila, "saldo_siigo")),
+            "Descuento": money_fila(fila, _sin_detalle(fila, "descuento_siigo"), blanco=True),
+            "Saldo": money_fila(fila, _valor(fila, "saldo_siigo")),
             "Días en cartera": dias_en_cartera(fila.get("fecha")),
         })
     return pd.DataFrame(salida, columns=COLUMNAS_GENERAL)
@@ -240,13 +263,13 @@ def tabla_estado_cuenta(filas: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
             "Factura": str(fila.get("factura") or "—"),
             "Fecha": fecha_visible(fila.get("fecha")),
             "Detalle del servicio": texto_completo(_sin_detalle(fila, "descripcion_siigo")),
-            "Sub valor factura": money(_sin_detalle(fila, "subtotal_siigo")),
-            "Impuestos": money_blanco(_sin_detalle(fila, "iva_siigo")),
-            "Retención": money_blanco(_sin_detalle(fila, "retefuente_siigo")),
-            "ICA": money_blanco(_sin_detalle(fila, "reteica_siigo")),
+            "Sub valor factura": money_fila(fila, _sin_detalle(fila, "subtotal_siigo")),
+            "Impuestos": money_fila(fila, _sin_detalle(fila, "iva_siigo"), blanco=True),
+            "Retención": money_fila(fila, _sin_detalle(fila, "retefuente_siigo"), blanco=True),
+            "ICA": money_fila(fila, _sin_detalle(fila, "reteica_siigo"), blanco=True),
             "Abono": "",
-            "Descuento": money_blanco(_sin_detalle(fila, "descuento_siigo")),
-            "Saldo pendiente": money(_valor(fila, "saldo_siigo")),
+            "Descuento": money_fila(fila, _sin_detalle(fila, "descuento_siigo"), blanco=True),
+            "Saldo pendiente": money_fila(fila, _valor(fila, "saldo_siigo")),
         })
     return pd.DataFrame(salida, columns=COLUMNAS_ESTADO_CUENTA)
 
@@ -254,13 +277,15 @@ def tabla_estado_cuenta(filas: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
 def clave_cliente(fila: Mapping[str, Any]) -> str:
     """Agrupa al mismo cliente aunque cada empresa escriba su nombre distinto.
 
-    Se usa el NIT sin dígito de verificación cuando existe, porque es el único
-    identificador estable entre las tres empresas; si falta, el nombre.
+    Se usa el documento sin dígito de verificación cuando existe, porque es el
+    único identificador estable entre las tres empresas; si falta, el nombre.
+    Va completo: recortarlo juntaba dos cédulas de 10 dígitos en un cliente.
     """
 
-    nit = re.sub(r"\D", "", str(fila.get("nit") or ""))
-    if nit:
-        return f"nit:{nit[:9]}"
+    documento = fila.get("identificacion") or str(fila.get("nit") or "").split("-")[0]
+    documento = re.sub(r"\D", "", str(documento or ""))
+    if documento:
+        return f"nit:{documento}"
     return f"nombre:{str(fila.get('cliente') or '').strip().casefold()}"
 
 
@@ -275,6 +300,15 @@ def nombre_cliente(filas: Iterable[Mapping[str, Any]]) -> str:
     if not conteo:
         return "—"
     return max(conteo.items(), key=lambda par: (par[1], par[0]))[0]
+
+
+def etiqueta_cliente(filas: Iterable[Mapping[str, Any]]) -> str:
+    """Nombre del cliente con su NIT, para que dos homónimos no se confundan."""
+
+    filas = list(filas)
+    nit = next((str(f["nit"]).strip() for f in filas if str(f.get("nit") or "").strip()), "")
+    nombre = nombre_cliente(filas)
+    return f"{nombre} · NIT {nit}" if nit else nombre
 
 
 def es_vigente(fila: Mapping[str, Any]) -> bool:
@@ -300,21 +334,50 @@ def suma_auditable(filas: Iterable[Mapping[str, Any]], campo: str) -> tuple[floa
 
     Devolver el faltante junto al total evita la mentira más cara de esta
     pantalla: tratar «no sé» como «cero» y mostrar un total que se ve completo
-    estando por debajo del real.
+    estando por debajo del real. Un valor negativo tampoco es confiable (su
+    estado es «Por revisar»): cuenta como faltante, igual que en la tabla de
+    clientes y en las gráficas, para que todas muestren la misma cifra.
     """
 
     total = 0.0
     faltantes = 0
     for fila in filas:
         valor = _valor(fila, campo)
-        if valor is None:
-            faltantes += 1
-            continue
         try:
-            total += float(valor)
+            numero = float(valor)
         except (TypeError, ValueError):
             faltantes += 1
+            continue
+        if numero < 0:
+            faltantes += 1
+            continue
+        total += numero
     return total, faltantes
+
+
+def saldo_visible(filas: Iterable[Mapping[str, Any]]) -> str:
+    """Saldo de unas facturas vigentes, sin mezclar monedas ni inventar ceros.
+
+    Raya si ninguna trae saldo leído; si faltan algunas, se dice cuántas. Las
+    de otra moneda van aparte con su código y nunca se suman a los pesos.
+    """
+
+    por_moneda: dict[str, list[Mapping[str, Any]]] = {}
+    for fila in filas:
+        if es_vigente(fila):
+            moneda = "COP" if es_cop(fila) else str(fila.get("moneda")).strip().upper()
+            por_moneda.setdefault(moneda, []).append(fila)
+    partes = []
+    for moneda, grupo in sorted(por_moneda.items(), key=lambda par: par[0] != "COP"):
+        total, faltantes = suma_auditable(grupo, "saldo_siigo")
+        if faltantes == len(grupo):
+            partes.append("—" if moneda == "COP" else f"{moneda} —")
+            continue
+        texto = money_fila(grupo[0], total)
+        if faltantes:
+            texto += f" · {faltantes} sin saldo leído"
+        partes.append(texto)
+    return " · ".join(partes) or money(0)
 
 
 def tabla_clientes(filas: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
@@ -383,7 +446,7 @@ def filtrar_saldo(
     if criterio == "Saldo en cero":
         return [f for f in filas if (v := _valor(f, "saldo_siigo")) is not None and float(v) == 0]
     if criterio == "Saldo sin dato":
-        return [f for f in filas if _valor(f, "saldo_siigo") is None]
+        return [f for f in filas if (v := _valor(f, "saldo_siigo")) is None or float(v) < 0]
     return filas
 
 
@@ -410,6 +473,7 @@ __all__ = [
     "es_ausente",
     "es_cop",
     "es_vigente",
+    "etiqueta_cliente",
     "etiqueta_estado",
     "fecha_visible",
     "filas_de_dataframe",
@@ -417,9 +481,11 @@ __all__ = [
     "filtrar_saldo",
     "money",
     "money_blanco",
+    "money_fila",
     "money_kpi",
     "nombre_cliente",
     "ordenar_filas",
+    "saldo_visible",
     "suma_auditable",
     "tabla_clientes",
     "tabla_estado_cuenta",

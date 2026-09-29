@@ -35,14 +35,15 @@ from src.siigo_vista import (
     clave_cliente,
     es_cop,
     es_vigente,
+    etiqueta_cliente,
     etiqueta_estado,
     filas_de_dataframe,
     filas_sumables,
     filtrar_saldo,
-    money,
     money_kpi,
     nombre_cliente,
     ordenar_filas,
+    saldo_visible,
     suma_auditable,
     tabla_clientes,
     tabla_estado_cuenta,
@@ -312,7 +313,7 @@ def _render_kpis(filas: list[dict[str, Any]]) -> None:
     with columnas[0]:
         render_kpi_card(
             "Total facturado",
-            money_kpi(facturado) if sumables else "—",
+            money_kpi(facturado, sin_total, len(sumables)),
             detalle_facturado,
         )
     with columnas[1]:
@@ -324,7 +325,7 @@ def _render_kpis(filas: list[dict[str, Any]]) -> None:
     with columnas[2]:
         render_kpi_card(
             "Saldo pendiente",
-            money_kpi(saldo) if sumables else "—",
+            money_kpi(saldo, sin_saldo, len(sumables)),
             detalle_saldo,
             highlighted=True,
         )
@@ -351,16 +352,24 @@ def _limpiar_filtros() -> None:
     st.session_state["filtro_dias_siigo"] = []
 
 
+def _opciones_cliente(filas: list[dict[str, Any]]) -> dict[str, str]:
+    """Clave de cada cliente → etiqueta visible, ordenadas por la etiqueta.
+
+    Los selectores guardan la clave y no el nombre: dos clientes con el mismo
+    nombre (o sin nombre) eran una sola opción y uno quedaba inaccesible.
+    """
+
+    grupos: dict[str, list[dict[str, Any]]] = {}
+    for fila in filas:
+        grupos.setdefault(clave_cliente(fila), []).append(fila)
+    opciones = {clave: etiqueta_cliente(grupo) for clave, grupo in grupos.items()}
+    return dict(sorted(opciones.items(), key=lambda par: (par[1].casefold(), par[0])))
+
+
 def _render_filtros(filas: list[dict[str, Any]]) -> dict[str, Any]:
     """Buscador y panel de filtros, con el mismo aspecto que la cartera manual."""
 
-    clientes = {}
-    for fila in filas:
-        clientes.setdefault(clave_cliente(fila), []).append(fila)
-    opciones_cliente = {
-        nombre_cliente(grupo): clave for clave, grupo in clientes.items()
-    }
-    opciones_cliente = dict(sorted(opciones_cliente.items(), key=lambda p: p[0].casefold()))
+    opciones_cliente = _opciones_cliente(filas)
     estados_presentes = [
         codigo for codigo in SIIGO_ESTADO_META
         if any(etiqueta_estado(f) == SIIGO_ESTADO_META[codigo] for f in filas)
@@ -395,7 +404,8 @@ def _render_filtros(filas: list[dict[str, Any]]) -> dict[str, Any]:
             seleccion_clientes = st.multiselect(
                 "Clientes",
                 list(opciones_cliente),
-                help="Busca por razón social; se muestra su cartera en todas las empresas.",
+                format_func=opciones_cliente.get,
+                help="Busca por razón social o NIT; se muestra su cartera en todas las empresas.",
                 placeholder="Selecciona clientes",
                 key="filtro_clientes_siigo",
             )
@@ -419,7 +429,7 @@ def _render_filtros(filas: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "termino": termino,
         "empresa": st.session_state.get("filtro_empresa_siigo", TODAS),
-        "clientes": tuple(opciones_cliente[nombre] for nombre in seleccion_clientes),
+        "clientes": tuple(seleccion_clientes),
         "estados": tuple(estados),
         "saldo": saldo,
         "rangos": tuple(rangos),
@@ -446,11 +456,7 @@ def _aplicar_filtros(
 def _render_estado_cuenta(filas: list[dict[str, Any]]) -> None:
     """Estado de cuenta de un cliente, separado por empresa, como el manual."""
 
-    grupos: dict[str, list[dict[str, Any]]] = {}
-    for fila in filas:
-        grupos.setdefault(clave_cliente(fila), []).append(fila)
-    opciones = {nombre_cliente(grupo): clave for clave, grupo in grupos.items()}
-    opciones = dict(sorted(opciones.items(), key=lambda p: p[0].casefold()))
+    opciones = _opciones_cliente(filas)
 
     render_section(
         "Detalle del cliente",
@@ -461,54 +467,59 @@ def _render_estado_cuenta(filas: list[dict[str, Any]]) -> None:
         return
     if st.session_state.get("detalle_cliente_siigo") not in opciones:
         st.session_state.pop("detalle_cliente_siigo", None)
-    etiqueta = st.selectbox(
+    clave = st.selectbox(
         "Cliente",
         list(opciones),
         index=None,
-        placeholder="Escribe o elige la razón social",
+        format_func=opciones.get,
+        placeholder="Escribe o elige la razón social o el NIT",
         key="detalle_cliente_siigo",
         label_visibility="collapsed",
     )
-    if not etiqueta:
+    if not clave:
         st.caption("Elige un cliente para ver su cartera separada por empresa.")
         return
 
-    del_cliente = grupos[opciones[etiqueta]]
+    del_cliente = [f for f in filas if clave_cliente(f) == clave]
+    nombre = nombre_cliente(del_cliente)
     sumables = filas_sumables(del_cliente)
-    facturado, _ = suma_auditable(sumables, "total_siigo")
+    facturado, sin_total = suma_auditable(sumables, "total_siigo")
     saldo, sin_saldo = suma_auditable(sumables, "saldo_siigo")
-    anuladas = sum(1 for f in del_cliente if not es_vigente(f))
-    otra_moneda = sum(1 for f in del_cliente if not es_cop(f))
+    # Una anulada no es deuda: sale de la grilla que se envía al cliente y se
+    # muestra aparte, como en la pestaña General.
+    vigentes = [f for f in del_cliente if es_vigente(f)]
+    anuladas = [f for f in del_cliente if not es_vigente(f)]
+    otra_moneda = sum(1 for f in vigentes if not es_cop(f))
 
     por_empresa: dict[str, list[dict[str, Any]]] = {}
-    for fila in del_cliente:
+    for fila in vigentes:
         por_empresa.setdefault(str(fila.get("empresa_codigo") or ""), []).append(fila)
     ordenadas = [c for c in EMPRESAS if c in por_empresa]
     ordenadas += [c for c in por_empresa if c not in EMPRESAS]
 
     st.caption(
-        f"{len(del_cliente)} factura(s) en {len(ordenadas)} empresa(s) según Siigo. "
+        f"{len(del_cliente)} factura(s) en "
+        f"{len({str(f.get('empresa_codigo') or '') for f in del_cliente})} empresa(s) según Siigo. "
         "Esta cartera es de solo consulta: nadie la digita."
     )
     for codigo in ordenadas:
         del_empresa = por_empresa[codigo]
-        saldo_empresa, _ = suma_auditable(filas_sumables(del_empresa), "saldo_siigo")
         titulo = company_name(codigo) if codigo in EMPRESAS else (codigo or "Sin empresa")
-        st.markdown(f"**{etiqueta} · {titulo}**")
+        st.markdown(f"**{nombre} · {titulo}**")
         render_grid(
             tabla_estado_cuenta(ordenar_filas(del_empresa)),
             key=f"tabla_detalle_cliente_siigo_{codigo or 'sin'}",
         )
         st.markdown(
             f'<div class="statement-company-total">Saldo pendiente '
-            f'{html.escape(titulo)}: {money(saldo_empresa)}</div>',
+            f'{html.escape(titulo)}: {html.escape(saldo_visible(del_empresa))}</div>',
             unsafe_allow_html=True,
         )
         st.write("")
 
     avisos = []
     if anuladas:
-        avisos.append(f"{anuladas} anulada(s)")
+        avisos.append(f"{len(anuladas)} anulada(s)")
     if sin_saldo:
         avisos.append(f"{sin_saldo} sin saldo leído")
     if otra_moneda:
@@ -516,12 +527,21 @@ def _render_estado_cuenta(filas: list[dict[str, Any]]) -> None:
     nota = f" · No incluye {', '.join(avisos)}" if avisos else ""
     st.markdown(
         '<div class="statement-total-row">'
-        f'<span class="statement-total-context">Facturado {money(facturado)}{html.escape(nota)}'
+        f'<span class="statement-total-context">'
+        f'Facturado {money_kpi(facturado, sin_total, len(sumables))}{html.escape(nota)}'
         '</span>'
-        f'<span class="statement-total-badge">SALDO EN CARTERA&nbsp;&nbsp;{money(saldo)}</span>'
+        f'<span class="statement-total-badge">SALDO EN CARTERA&nbsp;&nbsp;'
+        f'{money_kpi(saldo, sin_saldo, len(sumables))}</span>'
         "</div>",
         unsafe_allow_html=True,
     )
+    if anuladas:
+        with st.expander(f"Anuladas ({len(anuladas)})"):
+            render_grid(
+                tabla_estado_cuenta(ordenar_filas(anuladas)),
+                key="tabla_detalle_anuladas_siigo",
+            )
+            st.caption("Anuladas en Siigo: no son deuda y no suman en ningún saldo.")
 
 
 def _render_sin_lectura(reporte: Reporte | None) -> None:
@@ -616,9 +636,12 @@ def render_siigo_portfolio(company: str) -> None:
         st.write("")
         if vigentes:
             render_grid(tabla_general(vigentes), key=f"tabla_cartera_siigo_{filtros['orden']}", max_height=620)
+            otra_moneda = "" if all(es_cop(f) for f in vigentes) else (
+                " Las facturas en otra moneda llevan su código (por ejemplo, USD) y no se suman."
+            )
             st.caption(
                 "Valores en pesos colombianos, sin centavos. Una raya significa que "
-                "Siigo no entregó ese dato, no que valga cero."
+                "Siigo no entregó ese dato, no que valga cero." + otra_moneda
             )
         else:
             st.markdown(
@@ -637,7 +660,15 @@ def render_siigo_portfolio(company: str) -> None:
             f"{len(tabla)} cliente(s) con saldo según Siigo.",
         )
         st.write("")
-        if tabla.empty:
+        _, sin_saldo = suma_auditable(filas_sumables(visibles), "saldo_siigo")
+        if tabla.empty and sin_saldo:
+            st.markdown(
+                '<div class="empty-state"><strong>No hay clientes con saldo leído.</strong><br>'
+                f"{sin_saldo} factura(s) sin saldo leído en Siigo; no se puede saber "
+                "si hay deuda.</div>",
+                unsafe_allow_html=True,
+            )
+        elif tabla.empty:
             st.markdown(
                 '<div class="empty-state"><strong>No hay clientes con saldo pendiente.</strong><br>'
                 "Puede que todas las facturas del período estén pagadas.</div>",
