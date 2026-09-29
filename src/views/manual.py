@@ -367,17 +367,6 @@ def _available_years(invoices: list[dict[str, Any]]) -> tuple[int, ...]:
     return tuple(sorted({_invoice_date(invoice).year for invoice in invoices}, reverse=True))
 
 
-def _selected_period() -> tuple[int | None, int | None]:
-    """Lee el período actual antes de dibujar los indicadores."""
-
-    year = st.session_state.get("filtro_anio_manual")
-    month = st.session_state.get("filtro_mes_manual")
-    return (
-        year if isinstance(year, int) else None,
-        month if isinstance(month, int) and month in MONTH_LABELS else None,
-    )
-
-
 def _filter_period(
     invoices: list[dict[str, Any]],
     year: int | None,
@@ -560,22 +549,6 @@ def _filter_rows(
     return filter_age(rows, filters.age_ranges)
 
 
-def _filter_customers(
-    invoices: list[dict[str, Any]],
-    customers: tuple[str, ...],
-) -> list[dict[str, Any]]:
-    """Limita el resumen por cliente sin alterar el saldo total que debe."""
-
-    if not customers:
-        return invoices
-    selected_customers = set(customers)
-    return [
-        invoice
-        for invoice in invoices
-        if str(invoice["cliente"]).strip().casefold() in selected_customers
-    ]
-
-
 def _customer_debt_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
     """Agrupa el saldo pendiente por cliente, aun si debe a varias empresas."""
 
@@ -631,7 +604,7 @@ def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> str |
     table = _customer_debt_table(invoices)
     render_section(
         "Clientes y saldo pendiente",
-        f"{len(table)} cliente(s) con deuda en {_company_scope(company)}.",
+        f"{len(table)} cliente(s) con deuda en {_company_scope(company)}, según los filtros actuales.",
     )
     st.write("")
     if table.empty:
@@ -701,11 +674,10 @@ def _render_customer_detail(
     invoices: list[dict[str, Any]],
     filters: ManualFilters,
 ) -> bool:
-    """Muestra la cartera completa de un cliente, separada por empresa.
+    """Desglosa por empresa las facturas del cliente en la vista filtrada.
 
-    El total combinado responde "cuánto me debe este cliente"; el desglose por
-    empresa responde "dónde registro el abono y a cuáles facturas puede ir",
-    porque cada abono pertenece a una sola empresa.
+    Conserva el orden y alcance del cuadro general y del resumen de clientes.
+    Cada abono pertenece a una sola empresa.
 
     Devuelve ``True`` si se pidió registrar un abono desde el detalle.
     """
@@ -713,10 +685,11 @@ def _render_customer_detail(
     options = _customer_options(invoices)
     render_section(
         "Detalle del cliente",
-        "El total combina las tres empresas; el desglose muestra dónde vive cada factura.",
+        "Facturas y saldos según los filtros actuales, separados por empresa. "
+        "Limpia los filtros para consultar toda la cartera del cliente.",
     )
     if not options:
-        st.caption("Todavía no hay clientes registrados en este alcance.")
+        st.caption("No hay clientes que coincidan con los filtros actuales.")
         return False
     picker_key = "detalle_cliente_manual"
     labels = list(options)
@@ -1377,7 +1350,7 @@ def render_manual_portfolio(
         if clicked_customer:
             st.session_state[CLAVE_DETALLE_SOLICITADO] = clicked_customer
         st.write("")
-        payment_from_detail = _render_customer_detail(invoices, filters)
+        payment_from_detail = _render_customer_detail(filtered, filters)
     edit_invoice_id = st.session_state.get(CLAVE_FACTURA_EN_EDICION)
     if edit_invoice_id is not None:
         show_edit_invoice_dialog(filtered, int(edit_invoice_id))

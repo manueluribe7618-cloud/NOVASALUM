@@ -7,6 +7,33 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-29 — Revisión de integración y detalle coherente con los filtros
+
+- Pedido del dueño: conservar las gráficas, filtros y mejoras recientes;
+  revisar el resto y retirar lo que provoque conflictos.
+- Se retomó `main` actualizado. La carpeta estaba en una rama de respaldo
+  situada 38 commits detrás; no había modificaciones locales por rescatar.
+  Las ramas de respaldo se conservan.
+- Se confirmó una inconsistencia: el resumen de clientes y el Excel filtrado
+  respetaban los filtros, mientras el detalle del cliente recibía todas las
+  facturas de la empresa. Ahora recibe las mismas filas filtradas y ordenadas
+  que el cuadro general. El texto indica el alcance y cómo volver a la cartera
+  completa limpiando los filtros.
+- Se retiraron `_selected_period` y `_filter_customers`, funciones antiguas
+  sin uso en la aplicación. Los filtros vigentes conservan un único recorrido.
+- Se mantienen gráficas, ordenamiento, exportación, clic por cliente, edición,
+  registro de facturas, abono inicial, abonos posteriores y separación de Siigo.
+  `app.py` continúa siendo solo el punto de arranque.
+- Archivos: `src/views/manual.py`, `tests/test_customer_view.py` y
+  `tests/test_portfolio_analysis.py`. Se instalaron las dependencias ya
+  declaradas en el entorno local; no se cambió `requirements.txt`.
+- Impacto contable: ninguno. Solo cambia el alcance de lectura del detalle;
+  no se modificaron importes, fórmulas, facturas, pagos ni datos de producción.
+- Validación: caso reproducido antes del arreglo (detalle con tres facturas
+  frente a dos filtradas); corregido y cubierto con prueba de resumen, detalle,
+  exportación, orden y limpieza de filtros. Suite completa: 230 pruebas
+  correctas en datos temporales; pyflakes y revisión de diferencias limpios.
+
 
 ## 2026-09-29 — Orden, antigüedad y exportación por cliente
 

@@ -7,7 +7,7 @@ import unittest
 from src.views.manual import (
     ManualFilters,
     _customer_options,
-    _filter_customers,
+    _customer_debt_table,
     _filter_rows,
     _statement_table,
 )
@@ -88,11 +88,12 @@ class FiltroPorClienteTests(unittest.TestCase):
 
     def test_sin_seleccion_no_filtra(self) -> None:
         self.assertEqual(len(_filter_rows(self.facturas, _sin_filtros())), 4)
-        self.assertEqual(len(_filter_customers(self.facturas, ())), 4)
 
     def test_resumen_de_clientes_respeta_la_seleccion(self) -> None:
-        filas = _filter_customers(self.facturas, ("otro cliente sas",))
-        self.assertEqual([fila["id"] for fila in filas], [4])
+        filas = _filter_rows(self.facturas, _sin_filtros(("otro cliente sas",)))
+        tabla = _customer_debt_table(filas)
+        self.assertEqual(tabla["Cliente"].tolist(), ["Otro Cliente SAS"])
+        self.assertEqual(tabla["_saldo"].tolist(), [2_243_000])
 
 
 class EstadoDeCuentaTests(unittest.TestCase):

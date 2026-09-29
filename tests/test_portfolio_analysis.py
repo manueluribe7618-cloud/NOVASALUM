@@ -111,6 +111,7 @@ def manual_app():
     rows = [invoice(1, balance=10000, cliente="Zulu", fecha=(dt.date.today() - dt.timedelta(days=5)).isoformat()),
             invoice(2, balance=900, cliente="Álamo", empresa_codigo="LUAC", fecha=(dt.date.today() - dt.timedelta(days=45)).isoformat()),
             invoice(3, balance=2000, cliente="Beta", fecha=(dt.date.today() - dt.timedelta(days=65)).isoformat())]
+    rows = st.session_state.get("test_rows", rows)
     for row in rows:
         row.update(cliente_id=row["id"], descripcion="Servicio", placas="ABC123", subtotal_cop=row["saldo_cop"],
                    iva_cop=0, retefuente_cop=0, ica_cop=0, descuento_cop=0, abonos_cop=0,
@@ -119,6 +120,10 @@ def manual_app():
     def capture(table, **kwargs):
         if kwargs["key"].startswith("tabla_cartera_general"):
             st.session_state["visible_ids"] = table["_factura_id"].tolist()
+        elif kwargs["key"].startswith("tabla_clientes_manual"):
+            st.session_state["customer_summary"] = table.to_dict("records")
+        elif kwargs["key"].startswith("tabla_detalle_cliente"):
+            st.session_state[kwargs["key"]] = table["_factura_id"].tolist()
         return None
 
     original_export = manual.render_excel_export
@@ -135,6 +140,30 @@ def manual_app():
 
 
 class PortfolioUiTests(unittest.TestCase):
+    def test_customer_detail_matches_age_filter_summary_and_export(self):
+        today = date.today()
+        app = AppTest.from_function(manual_app, default_timeout=40)
+        app.session_state["test_rows"] = [
+            invoice(1, fecha=(today - timedelta(days=5)).isoformat(), balance=10000),
+            invoice(2, fecha=(today - timedelta(days=45)).isoformat(), balance=2000),
+            invoice(3, fecha=(today - timedelta(days=50)).isoformat(), balance=900),
+        ]
+        app.run()
+        app.selectbox(key="detalle_cliente_manual").select("Cliente SAS").run()
+        app.multiselect(key="filtro_dias_manual").set_value([AGE_RANGES[1]])
+        app.selectbox(key="orden_facturas_manual").select("Saldo: de menor a mayor").run()
+        app.radio(key="exportar_alcance_manual").set_value("Solo la vista filtrada").run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["visible_ids"], [3, 2])
+        self.assertEqual(app.session_state["export_ids"], [3, 2])
+        self.assertEqual(app.session_state["customer_summary"][0]["Saldo pendiente"], "$ 2.900")
+        self.assertEqual(app.session_state["tabla_detalle_cliente_NOVASA"], [3, 2])
+        totals = " ".join(m.value for m in app.markdown if "statement-total-badge" in m.value)
+        self.assertIn("$ 2.900", totals)
+        next(button for button in app.button if button.label == "Limpiar filtros").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["tabla_detalle_cliente_NOVASA"], [3, 2, 1])
+
     def test_dropdown_sort_and_combined_filters_update_table_kpis_and_charts(self):
         app = AppTest.from_function(manual_app, default_timeout=40).run()
         self.assertFalse(app.exception)
