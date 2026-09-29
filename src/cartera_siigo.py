@@ -48,6 +48,7 @@ COLUMNAS_CARTERA_SIIGO = [
     "fecha",
     "cliente",
     "nit",
+    "identificacion",
     "sucursal",
     "moneda",
     "tasa_cambio",
@@ -166,6 +167,20 @@ def _texto_cliente(cliente: Any) -> tuple[str, str]:
     if nit and digito:
         nit = f"{nit}-{digito}"
     return nombre, nit
+
+
+def _identificacion_cliente(cliente: Any) -> str:
+    """Documento del tercero sin dígito de verificación, con todos sus dígitos.
+
+    Es la clave para reconocer al mismo cliente en las tres empresas: una
+    cédula de 10 dígitos no se recorta y el DV nunca entra, aunque alguien lo
+    haya escrito dentro del mismo campo («79123456-3»).
+    """
+
+    if not isinstance(cliente, Mapping):
+        return ""
+    documento = _texto_dato(cliente.get("identification")).split("-")[0]
+    return re.sub(r"\D", "", documento)
 
 
 def _vencimientos_factura(factura: Mapping[str, Any]) -> list[dt.date]:
@@ -346,10 +361,41 @@ def _palabras_fiscales(valor: Any) -> set[str]:
     return {palabra for palabra in re.split(r"[^A-Z0-9]+", limpio) if palabra}
 
 
-def _impuestos_factura(factura: Mapping[str, Any]) -> dict[str, float]:
-    """Resume impuestos informativos sin inferir valores ausentes en Siigo."""
+def _clase_retencion(elemento: Mapping[str, Any]) -> str | None:
+    """Concepto de una retención por su nombre fiscal, o None si no es una."""
 
-    salida = {
+    nombre = f"{elemento.get('type', '')} {elemento.get('name', '')}"
+    clave = _clave_fiscal(nombre)
+    palabras = _palabras_fiscales(nombre)
+    # De lo más específico a lo más general. ICA se reconoce por la palabra
+    # completa o por el nombre largo del impuesto de industria y comercio,
+    # nunca porque las letras aparezcan dentro de otra palabra.
+    es_ica = (
+        "RETEICA" in clave
+        or "RETENCIONICA" in clave
+        or "ICA" in palabras
+        or {"INDUSTRIA", "COMERCIO"} <= palabras
+    )
+    es_fuente = "RETEFUENTE" in clave or "FUENTE" in palabras
+    if "RETEIVA" in clave or {"RETEIVA"} & palabras:
+        return "reteiva_siigo"
+    if es_ica:
+        return "reteica_siigo"
+    if es_fuente:
+        return "retefuente_siigo"
+    return None
+
+
+def _impuestos_factura(factura: Mapping[str, Any]) -> dict[str, float | None]:
+    """Resume impuestos informativos sin inferir valores ausentes en Siigo.
+
+    Un concepto queda en None («no se sabe») si alguno de sus elementos llega
+    sin ``value`` numérico, y los que salen de los ítems también cuando el
+    detalle no trae ítems: sumar lo que falta como cero afirmaría que la
+    factura no tiene IVA o retención.
+    """
+
+    salida: dict[str, float | None] = {
         "iva_siigo": 0.0,
         "otros_impuestos_siigo": 0.0,
         "retefuente_siigo": 0.0,
@@ -357,45 +403,45 @@ def _impuestos_factura(factura: Mapping[str, Any]) -> dict[str, float]:
         "reteiva_siigo": 0.0,
         "otras_retenciones_siigo": 0.0,
     }
-    for item in factura.get("items") or []:
+    desconocidos: set[str] = set()
+
+    def sumar(concepto: str, elemento: Mapping[str, Any]) -> None:
+        valor = _numero(elemento.get("value"))
+        if valor is None:
+            desconocidos.add(concepto)
+        else:
+            salida[concepto] += valor
+
+    items = factura.get("items")
+    if not isinstance(items, list) or not items:
+        desconocidos.update(
+            ("iva_siigo", "otros_impuestos_siigo", "retefuente_siigo",
+             "reteica_siigo", "reteiva_siigo")
+        )
+        items = []
+    for item in items:
         if not isinstance(item, Mapping):
             continue
         for impuesto in item.get("taxes") or []:
             if not isinstance(impuesto, Mapping):
                 continue
-            valor = _numero(impuesto.get("value")) or 0.0
-            nombre = f"{impuesto.get('type', '')} {impuesto.get('name', '')}"
-            clave = _clave_fiscal(nombre)
-            palabras = _palabras_fiscales(nombre)
-            if palabras & {"IVA", "VAT"} or clave.startswith("IVA"):
-                salida["iva_siigo"] += valor
-            else:
-                salida["otros_impuestos_siigo"] += valor
+            # Siigo Nube configura la retención por producto: llega aquí, no
+            # en ``retentions``, y debe clasificarse igual.
+            clase = _clase_retencion(impuesto)
+            if clase is None:
+                nombre = f"{impuesto.get('type', '')} {impuesto.get('name', '')}"
+                es_iva = (
+                    _palabras_fiscales(nombre) & {"IVA", "VAT"}
+                    or _clave_fiscal(nombre).startswith("IVA")
+                )
+                clase = "iva_siigo" if es_iva else "otros_impuestos_siigo"
+            sumar(clase, impuesto)
     for retencion in factura.get("retentions") or []:
         if not isinstance(retencion, Mapping):
             continue
-        valor = _numero(retencion.get("value")) or 0.0
-        nombre = f"{retencion.get('type', '')} {retencion.get('name', '')}"
-        clave = _clave_fiscal(nombre)
-        palabras = _palabras_fiscales(nombre)
-        # De lo más específico a lo más general. ICA se reconoce por la palabra
-        # completa o por el nombre largo del impuesto de industria y comercio,
-        # nunca porque las letras aparezcan dentro de otra palabra.
-        es_ica = (
-            "RETEICA" in clave
-            or "RETENCIONICA" in clave
-            or "ICA" in palabras
-            or {"INDUSTRIA", "COMERCIO"} <= palabras
-        )
-        es_fuente = "RETEFUENTE" in clave or "FUENTE" in palabras
-        if "RETEIVA" in clave or {"RETEIVA"} & palabras:
-            salida["reteiva_siigo"] += valor
-        elif es_ica:
-            salida["reteica_siigo"] += valor
-        elif es_fuente:
-            salida["retefuente_siigo"] += valor
-        else:
-            salida["otras_retenciones_siigo"] += valor
+        sumar(_clase_retencion(retencion) or "otras_retenciones_siigo", retencion)
+    for concepto in desconocidos:
+        salida[concepto] = None
     return salida
 
 
@@ -561,6 +607,7 @@ def facturas_a_dataframe(
             "fecha": fecha,
             "cliente": cliente,
             "nit": nit,
+            "identificacion": _identificacion_cliente(cliente_crudo),
             "sucursal": sucursal,
             "moneda": str(moneda or "COP").strip(),
             "tasa_cambio": tasa_cambio,
