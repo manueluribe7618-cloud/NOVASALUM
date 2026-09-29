@@ -12,11 +12,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+from functools import wraps
+import inspect
 import json
 import os
 from pathlib import Path
 import sqlite3
 import threading
+import time
 from typing import Any, Iterator, Mapping, Sequence
 
 from src.formato import hoy_colombia
@@ -89,6 +92,12 @@ ERRORES_INTEGRIDAD: tuple[type[Exception], ...] = (
 _CANDADO_PG = threading.Lock()
 _CONEXION_PG: Any = None
 _ESQUEMA_PG_LISTO = False
+# Cuándo respondió por última vez la conexión compartida. Probarla con un
+# SELECT 1 antes de cada uso duplicaba los viajes de red; basta con probarla
+# cuando lleva un rato quieta, que es cuando el pooler o la red la pueden
+# haber cortado sin avisar.
+_PG_RESPONDIO_EN = 0.0
+_PG_PROBAR_TRAS_SEGUNDOS = 5.0
 
 
 def url_supabase() -> str:
@@ -164,7 +173,10 @@ class _ConexionPG:
         self._conexion = conexion
 
     def execute(self, sql: str, parametros: Sequence[Any] = ()) -> Any:
-        return self._conexion.execute(sql.replace("?", "%s"), tuple(parametros))
+        global _PG_RESPONDIO_EN
+        cursor = self._conexion.execute(sql.replace("?", "%s"), tuple(parametros))
+        _PG_RESPONDIO_EN = time.monotonic()
+        return cursor
 
     def executescript(self, script: str) -> None:
         # El DDL del esquema no contiene punto y coma dentro de literales.
@@ -185,7 +197,7 @@ class _ConexionPG:
 def _conexion_pg() -> _ConexionPG:
     """Entrega la conexión compartida con Supabase, reconectando si murió."""
 
-    global _CONEXION_PG
+    global _CONEXION_PG, _PG_RESPONDIO_EN
     if psycopg is None:
         raise ErrorCartera(
             "SUPABASE_DB_URL está configurada pero falta el paquete psycopg. "
@@ -193,7 +205,13 @@ def _conexion_pg() -> _ConexionPG:
         )
     if _CONEXION_PG is not None:
         try:
-            _CONEXION_PG.execute("SELECT 1")
+            # psycopg marca la conexión como cerrada cuando una sentencia la
+            # encontró muerta: ahí se reconecta sin probar nada.
+            if getattr(_CONEXION_PG, "closed", False) is True:
+                raise ConnectionError("La conexión con Supabase se cerró.")
+            if time.monotonic() - _PG_RESPONDIO_EN >= _PG_PROBAR_TRAS_SEGUNDOS:
+                _CONEXION_PG.execute("SELECT 1")
+                _PG_RESPONDIO_EN = time.monotonic()
             return _ConexionPG(_CONEXION_PG)
         except Exception:
             try:
@@ -232,6 +250,10 @@ def _transaccion(ruta: str | Path | None = None) -> Iterator[Any]:
             except Exception:
                 conexion.rollback()
                 raise
+            finally:
+                # En la nube no hay forma barata de saber si cambió algo, y
+                # aquí solo se abren transacciones para escribir.
+                invalidar_lecturas()
         return
     conexion = _conexion(ruta)
     try:
@@ -242,6 +264,10 @@ def _transaccion(ruta: str | Path | None = None) -> Iterator[Any]:
         conexion.rollback()
         raise
     finally:
+        # En SQLite ``inicializar`` abre una transacción en cada llamada y casi
+        # nunca cambia nada: la memoria solo se descarta si se tocaron filas.
+        if getattr(conexion, "total_changes", 1):
+            invalidar_lecturas()
         conexion.close()
 
 
@@ -258,6 +284,86 @@ def _lectura(ruta: str | Path | None = None) -> Iterator[Any]:
         yield conexion
     finally:
         conexion.close()
+
+
+# ---------------------------------------------------------------------------
+# Memoria de lecturas. Streamlit reejecuta la página entera en cada clic y,
+# contra Supabase, cada consulta es un viaje de red: filtrar, ordenar o abrir
+# un diálogo volvía a leer la cartera completa. Lo que devuelven las funciones
+# marcadas con ``@_memorizar`` se guarda aquí y se descarta en cuanto una
+# transacción cambia filas (ver ``_transaccion``), así que lo que se guarda
+# desde esta aplicación se ve de inmediato. La vigencia acota lo que alguien
+# escriba por fuera (otro proceso, el panel de Supabase) y el botón
+# «Actualizar datos» la vacía a pedido.
+# ---------------------------------------------------------------------------
+
+_VIGENCIA_LECTURAS_SEGUNDOS = 60.0
+_LECTURAS: dict[Any, tuple[float, date, Any]] = {}
+_GENERACION_LECTURAS = 0
+_CANDADO_LECTURAS = threading.Lock()
+
+
+def invalidar_lecturas() -> None:
+    """Descarta las lecturas guardadas: la próxima consulta va a la base."""
+
+    global _GENERACION_LECTURAS
+    with _CANDADO_LECTURAS:
+        _GENERACION_LECTURAS += 1
+        _LECTURAS.clear()
+
+
+def _destino_lecturas(ruta: str | Path | None) -> tuple[str, str]:
+    if _usa_postgres(ruta):
+        return ("postgres", url_supabase())
+    return ("sqlite", str(_ruta_base(ruta)))
+
+
+def _copia_lectura(valor: Any) -> Any:
+    # Cada llamada recibe sus propias filas: quien las modifique no altera lo
+    # que verán las demás sesiones.
+    if isinstance(valor, list):
+        return [dict(fila) if isinstance(fila, dict) else fila for fila in valor]
+    return valor
+
+
+def _memorizar(funcion: Any) -> Any:
+    """Guarda el resultado de una lectura hasta que algo cambie en la base."""
+
+    firma = inspect.signature(funcion)
+
+    @wraps(funcion)
+    def lectura_memorizada(*args: Any, **kwargs: Any) -> Any:
+        argumentos = firma.bind(*args, **kwargs)
+        argumentos.apply_defaults()
+        parametros = dict(argumentos.arguments)
+        ruta = parametros.pop("ruta", None)
+        llave = (funcion.__name__, _destino_lecturas(ruta), tuple(sorted(parametros.items())))
+        try:
+            hash(llave)
+        except TypeError:
+            return funcion(*args, **kwargs)
+        # El estado VENCIDA y los días de mora se calculan contra el día de
+        # hoy: lo guardado ayer no sirve después de medianoche.
+        hoy = hoy_colombia()
+        ahora = time.monotonic()
+        with _CANDADO_LECTURAS:
+            guardada = _LECTURAS.get(llave)
+            generacion = _GENERACION_LECTURAS
+        if (
+            guardada is not None
+            and guardada[1] == hoy
+            and ahora - guardada[0] < _VIGENCIA_LECTURAS_SEGUNDOS
+        ):
+            return _copia_lectura(guardada[2])
+        valor = funcion(*args, **kwargs)
+        with _CANDADO_LECTURAS:
+            # Si una escritura terminó mientras se leía, este resultado puede
+            # ser anterior a ella: se entrega, pero no se guarda.
+            if generacion == _GENERACION_LECTURAS:
+                _LECTURAS[llave] = (ahora, hoy, valor)
+        return _copia_lectura(valor)
+
+    return lectura_memorizada
 
 
 def _esquema_sql(*, postgres: bool) -> str:
@@ -953,6 +1059,7 @@ def _filas_facturas(
     return filas
 
 
+@_memorizar
 def listar_facturas(
     empresa_codigo: str | None = None,
     *,
@@ -992,6 +1099,7 @@ def resumen_cartera(
     }
 
 
+@_memorizar
 def listar_nombres_clientes(ruta: str | Path | None = None) -> list[str]:
     """Razones sociales registradas, incluidas las que ya no tienen deuda."""
 
@@ -1234,6 +1342,7 @@ def guardar_revision_conciliacion(
         return revision_id
 
 
+@_memorizar
 def resumen_actividad(
     limite: int = 6,
     ruta: str | Path | None = None,
@@ -1372,6 +1481,7 @@ __all__ = [
     "guardar_revision_conciliacion",
     "hay_datos",
     "inicializar",
+    "invalidar_lecturas",
     "listar_abonos",
     "listar_facturas",
     "obtener_factura",

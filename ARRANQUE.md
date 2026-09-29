@@ -174,6 +174,22 @@ no comprueba quién está al otro lado, y por aquí viaja la cartera completa.
 Degradar en silencio sería peor que no conectar. Está cubierto por
 `tests/test_guardas_almacen.py`.
 
+### La cartera no consulta la base en cada clic
+
+Streamlit reejecuta la página entera en cada clic y, contra Supabase, cada
+consulta es un viaje de red. Por eso `src/database.py` guarda lo que devuelven
+`listar_facturas`, `listar_nombres_clientes` y `resumen_actividad` (decorador
+`@_memorizar`) y lo descarta en cuanto una transacción cambia filas. Lo que
+hay que saber antes de tocar la base:
+
+- Toda escritura pasa por `_transaccion`; así se ve de inmediato. Lo que se
+  escriba por otro camino (un script, SQL en el panel de Supabase) aparece al
+  vencer la memoria (60 s) o al pulsar «Actualizar datos», que llama a
+  `invalidar_lecturas()`.
+- Una lectura nueva que se consulte en cada clic debería llevar `@_memorizar`
+  si devuelve datos de la cartera. Las de acceso y seguridad no se memorizan.
+- Está cubierto por `tests/test_memoria_lecturas.py`.
+
 ---
 
 ## Cómo trabaja este dueño (importante)

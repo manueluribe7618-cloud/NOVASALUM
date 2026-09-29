@@ -1292,7 +1292,7 @@ def render_manual_portfolio(
 
     refresh_column, export_column, _ = st.columns([1.2, 1.4, 3.4])
     with refresh_column:
-        refreshed = st.button("Actualizar datos", key="actualizar_manual", width="stretch")
+        refreshed = st.button("Actualizar datos", key="actualizar_manual", width="stretch", on_click=db.invalidar_lecturas)
     all_invoices = db.listar_facturas()
     invoices = [row for row in all_invoices if company == TODAS or row["empresa_codigo"] == company]
     if refreshed:

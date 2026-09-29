@@ -7,6 +7,61 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-09-29 — Cartera más rápida: memoria de lecturas y menos viajes a Supabase
+
+- Pedido: resolver la lentitud contra Supabase y que la aplicación sea más
+  rápida en general, con pruebas de todo lo que se publica.
+- Medición previa con ~210 facturas contra un Postgres 16 real a ~53 ms por
+  viaje (latencia simulada con un proxy): cada clic en la cartera manual
+  hacía 4 viajes a la base (2 consultas y 2 `SELECT 1` de verificación) y
+  tardaba ~258 ms; Siigo y Conciliación, ~115 ms solo por la actividad de la
+  barra lateral; Seguridad, 10 viajes (~550 ms). El Python de la página
+  tardaba ~22 ms: el resto era espera de red. Armar las gráficas de Plotly
+  era cerca del 30 % de ese Python.
+- Memoria de lecturas en `src/database.py` (`@_memorizar`): `listar_facturas`,
+  `listar_nombres_clientes` y `resumen_actividad` guardan su resultado. Se
+  descarta entera cuando una transacción cambia filas —en Supabase cualquier
+  transacción; en SQLite solo si tocó filas, porque `inicializar` abre una en
+  cada clic—, así que lo guardado desde la aplicación se ve de inmediato en
+  todas las sesiones. Vence a los 60 s por lo que se escriba por fuera (otro
+  proceso, el panel de Supabase); la fecha forma parte de su validez (VENCIDA
+  y días de mora cambian a medianoche); cada llamada recibe copias de las
+  filas, y una lectura que se cruzó con una escritura no se guarda.
+- «Actualizar datos» vacía la memoria (`db.invalidar_lecturas`) antes de
+  releer: sigue trayendo lo último de la base.
+- La conexión compartida ya no se prueba con `SELECT 1` antes de cada uso:
+  solo tras 5 s sin responder, o se renueva de una vez si psycopg ya la sabe
+  cerrada. Si el servidor cortara la conexión en medio de una ráfaga de
+  consultas, esa consulta fallaría una vez y la siguiente reconectaría, igual
+  que antes si el corte caía entre la prueba y la consulta.
+- Las figuras de las gráficas se memorizan por su resumen
+  (`st.cache_resource`): las mismas cifras no se vuelven a armar.
+  `portfolio_figures` sigue entregando figuras nuevas a quien la llame.
+- Resultado con la misma medición: un clic sin cambios en la cartera manual
+  (filtrar, ordenar, cambiar de empresa o de pestaña) pasa de ~258 ms a
+  ~11–20 ms y no va a la base; Siigo y Conciliación, de ~115 ms a ~3–6 ms; el
+  rerun justo después de guardar, de ~264 a ~142 ms; guardar una factura, de
+  ~319 a ~267 ms; Seguridad, de 10 a 6 viajes. En SQLite local, de ~22 a
+  ~12 ms por clic.
+- Sin cambios: el esquema y su creación (el arranque en frío sigue igual;
+  mandar el script en un solo viaje no se puede probar aquí contra el pooler
+  de Supabase), las lecturas de acceso y seguridad (siempre van a la base) y
+  cualquier fórmula, filtro, gráfica o flujo de registro.
+- Archivos: `src/database.py`, `src/views/manual.py` (botón),
+  `src/ui/portfolio_analysis.py`, `tests/test_memoria_lecturas.py` (nuevo) y
+  `ARRANQUE.md`.
+- Impacto contable: ninguno. No cambia ningún cálculo, importe ni dato; solo
+  cuándo se consulta la base.
+- Validación: 26 pruebas nuevas (lecturas repetidas, cada tipo de escritura
+  visible de inmediato, vencimiento, medianoche, copias, bases separadas,
+  escritura simultánea, el botón en la vista real, conexión quieta, cerrada o
+  caída, transacciones en la nube y gráficas). Cada punto crítico se rompió a
+  propósito para confirmar que alguna prueba lo detecta: 8 de 8 detectados.
+  Suite completa: 257 pruebas correctas; pyflakes limpio. Recorrido de punta
+  a punta contra Postgres 16 con latencia: factura por el diálogo, abono,
+  edición, anulación, cambio hecho por fuera más «Actualizar datos» y
+  conexión cortada por el servidor (se reconecta sola), todo correcto.
+
 ## 2026-09-29 — Mitigación del KeyError intermitente al importar la app
 
 - El dueño reportó `KeyError` en `app.py:8`, al importar `src.app_shell`,
