@@ -142,7 +142,12 @@ class TablasTests(unittest.TestCase):
         visible = tabla_general([fila]).iloc[0]
         for columna in ("Detalle del servicio", "Subtotal", "IVA", "Retefuente", "ICA"):
             self.assertEqual(visible[columna], "—", columna)
-        self.assertEqual(visible["Estado"], "Sin leer")
+        self.assertEqual(etiqueta_estado(fila), "Sin leer")
+        self.assertNotIn("Estado", visible.index)
+        self.assertEqual(
+            visible["Días en cartera"],
+            max(0, (dt.date.today() - dt.date.fromisoformat(fila["fecha"])).days),
+        )
 
     def test_la_columna_abonos_queda_vacia(self) -> None:
         self.assertEqual(tabla_general([_fila()]).iloc[0]["Abonos"], "")

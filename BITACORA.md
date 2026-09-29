@@ -7,6 +7,42 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+
+## 2026-09-29 — Orden, antigüedad y exportación por cliente
+
+- Pedido del dueño: ordenar de menor a mayor y alfabéticamente, mostrar saldo
+  por empresa y rangos de días con gráficas de librería; actualizar datos y
+  descargar Excel con resumen y una hoja por cliente. Autorizó publicar en main.
+- Selector de orden por saldo, cliente, fecha, factura y días, en ambos sentidos.
+  La grilla también compara dinero y fechas como números/fechas y conserva el
+  doble clic para editar. Altura limitada con desplazamiento interno.
+- Gráficas interactivas de Plotly: anillo por empresa y barras por antigüedad.
+  Rangos 0–30, 31–60, 61–90, 91–180, 181–365 y más de 365 días desde emisión.
+  Los filtros controlan tarjetas, gráficas, tabla y resumen de clientes.
+- «Actualizar datos» relee la cartera manual; en Siigo vuelve a consultar el
+  período y empresas seleccionados con el flujo existente de lectura.
+- Exportación bajo demanda con XlsxWriter: resumen y una hoja por cliente,
+  desglose por empresa, detalle completo, fechas e importes numéricos, filtros,
+  paneles inmovilizados, enlaces internos y formato de impresión. Se puede
+  descargar toda la cartera/lectura o solo la vista filtrada.
+- Manual: fórmulas de total y saldo iguales a las de la aplicación. Siigo:
+  importes oficiales, campos ausentes vacíos, sin inventar abonos; anuladas y
+  monedas distintas de COP no inflan el resumen. La exportación identifica la
+  fecha y origen de la lectura, incluida demostración e incidencias.
+- Archivos: requirements.txt, src/ui/{grid,ingreso,exports,portfolio_analysis}.py,
+  src/views/{manual,siigo}.py, src/exportacion.py, tests/test_exportacion.py,
+  tests/test_portfolio_analysis.py y tests/test_siigo_vista.py. Se actualiza una
+  expectativa antigua de Estado a Días en cartera, sin cambiar esa regla.
+- Impacto contable: ninguno. No se modifican facturas, abonos, fórmulas del
+  sistema ni la base de producción; la plantilla Excel es una copia descargable.
+- Validación: pruebas de orden numérico/natural, límites de rangos, filtros
+  combinados y alcance de exportación; archivo descargado desde el navegador
+  con 207 facturas y 59 clientes (60 hojas), contrastado campo por campo con
+  una copia local. Saldo exportado: $1.402.177.768. Recálculo independiente de
+  fórmulas: un cambio de $1.000 se refleja en el cliente y el resumen, restaurado
+  después. Revisión visual del resumen, detalle y gráficas. Suite automatizada
+  completa y análisis estático antes de publicar; credenciales fuera de Git.
+
 ## 2026-09-15 — Dueño confirma las dos reglas de conciliación
 
 - Decisión del dueño: aprueba los dos veredictos de comparación que la

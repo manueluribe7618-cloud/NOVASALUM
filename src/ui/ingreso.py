@@ -59,7 +59,7 @@ def cerrar_sesion() -> None:
         k for k in st.session_state
         if k.startswith(("filtro_", "abono_", "factura_", "editar_factura_",
                          "dialogo_", "detalle_cliente_", "siigo_", "vista",
-                         "ingreso_", "activacion_"))
+                         "ingreso_", "activacion_", "orden_", "exportar_"))
     ]:
         st.session_state.pop(clave, None)
 

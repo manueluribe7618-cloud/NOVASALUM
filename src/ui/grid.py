@@ -82,6 +82,39 @@ COLUMNAS_DERECHA = (
     "Saldo pendiente",
 )
 
+MONEY_COMPARATOR = JsCode("""
+function(a, b, nodeA, nodeB, descending) {
+    const number = value => {
+        if (value === null || value === undefined || String(value).trim() === "—") return null;
+        const clean = String(value).replace(/[$\\s.]/g, "").replace(",", ".");
+        return clean === "" ? 0 : Number(clean);
+    };
+    const x = number(a), y = number(b);
+    const missingX = x === null || !Number.isFinite(x);
+    const missingY = y === null || !Number.isFinite(y);
+    if (missingX || missingY) return missingX === missingY ? 0 : (missingX ? 1 : -1) * (descending ? -1 : 1);
+    return x - y;
+}
+""")
+
+DATE_COMPARATOR = JsCode("""
+function(a, b, nodeA, nodeB, descending) {
+    const date = value => {
+        const match = String(value || "").match(/^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/);
+        return match ? Number(match[3] + match[2] + match[1]) : null;
+    };
+    const x = date(a), y = date(b);
+    if (x === null || y === null) return x === y ? 0 : (x === null ? 1 : -1) * (descending ? -1 : 1);
+    return x - y;
+}
+""")
+
+TEXT_COMPARATOR = JsCode("""
+function(a, b) {
+    return new Intl.Collator("es", {numeric: true, sensitivity: "base"}).compare(a || "", b || "");
+}
+""")
+
 
 def render_grid(
     table: pd.DataFrame,
@@ -89,6 +122,7 @@ def render_grid(
     key: str,
     edit_on_double_click: bool = False,
     on_row_event: JsCode | None = None,
+    max_height: int | None = None,
 ) -> dict[str, Any] | None:
     """Muestra una tabla de librería con cabecera azul y menú tipo Excel.
 
@@ -106,7 +140,11 @@ def render_grid(
     if "Detalle del servicio" in table.columns:
         builder.configure_column("Detalle del servicio", minWidth=250)
     if "Cliente" in table.columns:
-        builder.configure_column("Cliente", minWidth=210)
+        builder.configure_column("Cliente", minWidth=210, comparator=TEXT_COMPARATOR)
+    if "Factura" in table.columns:
+        builder.configure_column("Factura", comparator=TEXT_COMPARATOR)
+    if "Fecha" in table.columns:
+        builder.configure_column("Fecha", comparator=DATE_COMPARATOR)
     if "_factura_id" in table.columns:
         builder.configure_column("_factura_id", hide=True, suppressColumnsToolPanel=True)
     if "Estado" in table.columns:
@@ -118,10 +156,11 @@ def render_grid(
         builder.configure_column(
             "Días en cartera", pinned="right", lockPinned=True, width=145, minWidth=145,
             cellStyle={"textAlign": "right", "fontWeight": "700"},
+            comparator=MONEY_COMPARATOR,
         )
     for name in COLUMNAS_DERECHA:
         if name in table.columns:
-            builder.configure_column(name, cellStyle={"textAlign": "right"})
+            builder.configure_column(name, cellStyle={"textAlign": "right"}, comparator=MONEY_COMPARATOR)
     builder.configure_grid_options(
         animateRows=False,
         headerHeight=42,
@@ -138,7 +177,7 @@ def render_grid(
     result = AgGrid(
         table,
         gridOptions=builder.build(),
-        height=max(120, 50 + 38 * len(table)),
+        height=min(max_height or 100_000, max(120, 50 + 38 * len(table))),
         fit_columns_on_grid_load=False,
         update_mode=GridUpdateMode.NO_UPDATE,
         update_on=["invoiceEditRequested"] if edit_on_double_click else [],

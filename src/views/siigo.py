@@ -57,6 +57,11 @@ from src.ui.components import (
     render_section,
 )
 from src.ui.grid import render_grid
+from src.ui.exports import render_excel_export
+from src.ui.portfolio_analysis import (
+    AGE_RANGES, NO_DATE, SORT_OPTIONS, CUSTOMER_SORT_OPTIONS,
+    filter_age, render_portfolio_charts, sort_customer_table, sort_invoices,
+)
 
 
 # Claves publicadas para la pantalla de conciliación, que cruza esta lectura
@@ -169,7 +174,8 @@ def _formulario_consulta(
                 key="siigo_empresas",
             )
         consultar = st.form_submit_button(
-            "Consultar Siigo ahora", type="primary", disabled=configuracion is None
+            "Actualizar datos" if _reporte_publicado() is not None else "Consultar Siigo ahora",
+            type="primary", disabled=configuracion is None
         )
     muestra = st.button("Cargar muestra de demostración", key="siigo_muestra")
 
@@ -328,7 +334,7 @@ def _contar_filtros() -> int:
     activos = 0
     if st.session_state.get("filtro_empresa_siigo", TODAS) != TODAS:
         activos += 1
-    for clave in ("filtro_clientes_siigo", "filtro_estados_siigo"):
+    for clave in ("filtro_clientes_siigo", "filtro_estados_siigo", "filtro_dias_siigo"):
         if st.session_state.get(clave):
             activos += 1
     if st.session_state.get("filtro_saldo_siigo", FILTROS_SALDO[0]) != FILTROS_SALDO[0]:
@@ -342,6 +348,7 @@ def _limpiar_filtros() -> None:
     st.session_state["filtro_clientes_siigo"] = []
     st.session_state["filtro_estados_siigo"] = []
     st.session_state["filtro_saldo_siigo"] = FILTROS_SALDO[0]
+    st.session_state["filtro_dias_siigo"] = []
 
 
 def _render_filtros(filas: list[dict[str, Any]]) -> dict[str, Any]:
@@ -359,13 +366,15 @@ def _render_filtros(filas: list[dict[str, Any]]) -> dict[str, Any]:
         if any(etiqueta_estado(f) == SIIGO_ESTADO_META[codigo] for f in filas)
     ]
 
-    columna_busqueda, columna_filtros = st.columns([3.8, 1], vertical_alignment="bottom")
+    columna_busqueda, columna_orden, columna_filtros = st.columns([2.4, 1.8, 0.8], vertical_alignment="bottom")
     with columna_busqueda:
         termino = st.text_input(
             "Buscar en la cartera",
             placeholder="Factura, cliente, NIT o detalle del servicio",
             key="filtro_facturas_siigo",
         )
+    with columna_orden:
+        orden = st.selectbox("Ordenar por", list(SORT_OPTIONS), key="orden_facturas_siigo")
     with columna_filtros:
         activos = _contar_filtros()
         with st.popover(
@@ -398,6 +407,10 @@ def _render_filtros(filas: list[dict[str, Any]]) -> dict[str, Any]:
                 key="filtro_estados_siigo",
             )
             saldo = st.selectbox("Saldo", FILTROS_SALDO, key="filtro_saldo_siigo")
+            rangos = st.multiselect(
+                "Días en cartera", [*AGE_RANGES, NO_DATE], key="filtro_dias_siigo",
+                placeholder="Todos los rangos", help="Días desde la fecha de emisión de la factura.",
+            )
             st.button(
                 "Limpiar filtros",
                 use_container_width=True,
@@ -409,6 +422,8 @@ def _render_filtros(filas: list[dict[str, Any]]) -> dict[str, Any]:
         "clientes": tuple(opciones_cliente[nombre] for nombre in seleccion_clientes),
         "estados": tuple(estados),
         "saldo": saldo,
+        "rangos": tuple(rangos),
+        "orden": orden,
     }
 
 
@@ -425,7 +440,7 @@ def _aplicar_filtros(
     if filtros["estados"]:
         etiquetas = {SIIGO_ESTADO_META[c] for c in filtros["estados"]}
         salida = [f for f in salida if etiqueta_estado(f) in etiquetas]
-    return filtrar_saldo(salida, filtros["saldo"])
+    return filter_age(filtrar_saldo(salida, filtros["saldo"]), filtros.get("rangos", ()))
 
 
 def _render_estado_cuenta(filas: list[dict[str, Any]]) -> None:
@@ -569,7 +584,18 @@ def render_siigo_portfolio(company: str) -> None:
     # dibujarlas después de conocer el filtro, sin mover nada de lugar.
     tarjetas = st.container()
     filtros = _render_filtros(filas)
-    visibles = _aplicar_filtros(filas, filtros)
+    visibles = sort_invoices(_aplicar_filtros(filas, filtros), filtros["orden"], balance_field="saldo_siigo")
+    with st.popover("Exportar Excel"):
+        scope = st.radio("Contenido", ["Toda la lectura de Siigo", "Solo la vista filtrada"], key="exportar_alcance_siigo")
+        export_rows = filas if scope == "Toda la lectura de Siigo" else visibles
+        marca = reporte.leido_en.strftime("%d/%m/%Y %H:%M") if reporte.leido_en else "sin fecha"
+        st.caption(f"{len(export_rows)} facturas. Origen: {reporte.origen}. Última lectura: {marca}.")
+        source_note = f"Fuente: Siigo ({reporte.origen}). Lectura: {marca}."
+        if reporte.errores:
+            source_note += " Consulta con incidencias: " + ", ".join(sorted(reporte.errores)) + "."
+        if reporte.sin_detalle:
+            source_note += f" {reporte.sin_detalle} facturas sin detalle completo en la lectura."
+        render_excel_export(export_rows, source="siigo", scope=scope, source_note=source_note)
     with tarjetas:
         _render_kpis(visibles)
         st.write("")
@@ -578,6 +604,10 @@ def render_siigo_portfolio(company: str) -> None:
 
     general, clientes = st.tabs(["General", "Clientes y saldo pendiente"])
     with general:
+        render_portfolio_charts(filas_sumables(visibles), key="analisis_siigo", balance_field="saldo_siigo")
+        if any(not es_cop(f) for f in vigentes):
+            st.caption("Las gráficas solo suman COP; las facturas en otras monedas permanecen en la tabla.")
+        st.write("")
         empresa_titulo = company_name(filtros["empresa"])
         render_section(
             f"Cartera Siigo · {empresa_titulo}",
@@ -585,7 +615,7 @@ def render_siigo_portfolio(company: str) -> None:
         )
         st.write("")
         if vigentes:
-            render_grid(tabla_general(vigentes), key="tabla_cartera_siigo")
+            render_grid(tabla_general(vigentes), key=f"tabla_cartera_siigo_{filtros['orden']}", max_height=620)
             st.caption(
                 "Valores en pesos colombianos, sin centavos. Una raya significa que "
                 "Siigo no entregó ese dato, no que valga cero."
@@ -614,7 +644,9 @@ def render_siigo_portfolio(company: str) -> None:
                 unsafe_allow_html=True,
             )
         else:
-            render_grid(tabla[list(COLUMNAS_CLIENTES)], key="tabla_clientes_siigo")
+            orden_clientes = st.selectbox("Ordenar clientes por", CUSTOMER_SORT_OPTIONS, key="orden_clientes_siigo")
+            tabla = sort_customer_table(tabla, orden_clientes)
+            render_grid(tabla[list(COLUMNAS_CLIENTES)], key=f"tabla_clientes_siigo_{orden_clientes}", max_height=520)
         st.write("")
         _render_estado_cuenta(visibles)
 

@@ -21,6 +21,11 @@ from src import database as db
 from src.formato import parse_cop
 from src.taxes import TAX_COMPONENTS, TAX_DEFAULTS, calculate_tax
 from src.ui.grid import render_grid
+from src.ui.portfolio_analysis import (
+    AGE_RANGES, CUSTOMER_SORT_OPTIONS, SORT_OPTIONS, days_in_portfolio,
+    filter_age, render_portfolio_charts, sort_customer_table, sort_invoices,
+)
+from src.ui.exports import render_excel_export
 from src.ui.components import (
     EMPRESAS,
     ESTADO_META,
@@ -142,6 +147,7 @@ class ManualFilters:
     year: int | None
     month: int | None
     balance: str
+    age_ranges: tuple[str, ...] = ()
 
 
 def _render_kpis(invoices: list[dict[str, Any]]) -> None:
@@ -182,8 +188,7 @@ def _render_kpis(invoices: list[dict[str, Any]]) -> None:
 def _days_in_portfolio(row: dict[str, Any], *, today: dt.date | None = None) -> int:
     """Días transcurridos desde la emisión, sin depender del vencimiento."""
 
-    issued_on = dt.date.fromisoformat(str(row["fecha"])[:10])
-    return max(0, ((today or dt.date.today()) - issued_on).days)
+    return days_in_portfolio(row["fecha"], today=today) or 0
 
 
 def _invoices_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -216,7 +221,8 @@ def _invoices_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def _render_grid(
-    table: pd.DataFrame, *, key: str, edit_on_double_click: bool = False
+    table: pd.DataFrame, *, key: str, edit_on_double_click: bool = False,
+    max_height: int | None = None,
 ) -> dict[str, Any] | None:
     """Muestra la tabla compartida; el doble clic para editar es solo manual."""
 
@@ -225,6 +231,7 @@ def _render_grid(
         key=key,
         edit_on_double_click=edit_on_double_click,
         on_row_event=REQUEST_INVOICE_EDIT if edit_on_double_click else None,
+        max_height=max_height,
     )
 
 
@@ -324,6 +331,7 @@ def _clear_manual_filters() -> None:
         "filtro_anio_manual",
         "filtro_mes_manual",
         "filtro_saldo_manual",
+        "filtro_dias_manual",
     ):
         st.session_state.pop(key, None)
     st.session_state["filtro_empresa_manual"] = TODAS
@@ -351,6 +359,8 @@ def _filter_count() -> int:
         active += 1
     if st.session_state.get("filtro_mes_manual") is not None:
         active += 1
+    if st.session_state.get("filtro_dias_manual"):
+        active += 1
     return active
 
 
@@ -368,13 +378,15 @@ def _render_compact_filters(
         if any(row["estado"] == state for row in invoices)
     )
     current_count = _filter_count()
-    search_column, filters_column = st.columns([3.8, 1], vertical_alignment="bottom")
+    search_column, order_column, filters_column = st.columns([2.4, 1.8, 0.8], vertical_alignment="bottom")
     with search_column:
         term = st.text_input(
             "Buscar en la cartera",
             placeholder="Factura, cliente, placa o detalle",
             key="filtro_facturas_manual",
         )
+    with order_column:
+        st.selectbox("Ordenar por", list(SORT_OPTIONS), key="orden_facturas_manual")
     with filters_column:
         with st.popover(
             f"Filtros · {current_count}" if current_count else "Filtros",
@@ -431,6 +443,10 @@ def _render_compact_filters(
                 BALANCE_FILTERS,
                 key="filtro_saldo_manual",
             )
+            age_ranges = st.multiselect(
+                "Días en cartera", AGE_RANGES, key="filtro_dias_manual",
+                placeholder="Todos los rangos", help="Días desde la fecha de emisión de la factura.",
+            )
             st.button(
                 "Limpiar filtros",
                 use_container_width=True,
@@ -444,6 +460,7 @@ def _render_compact_filters(
         year=year,
         month=month,
         balance=balance,
+        age_ranges=tuple(age_ranges),
     )
 
 
@@ -468,7 +485,7 @@ def _filter_rows(
         rows = [row for row in rows if int(row["saldo_cop"]) > 0]
     elif filters.balance == "Saldo en cero":
         rows = [row for row in rows if int(row["saldo_cop"]) == 0]
-    return rows
+    return filter_age(rows, filters.age_ranges)
 
 
 def _filter_customers(
@@ -547,7 +564,9 @@ def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> None:
             unsafe_allow_html=True,
         )
     else:
-        _render_grid(table.drop(columns="_saldo"), key="tabla_clientes_manual")
+        order = st.selectbox("Ordenar clientes por", CUSTOMER_SORT_OPTIONS, key="orden_clientes_manual")
+        table = sort_customer_table(table, order)
+        _render_grid(table.drop(columns="_saldo"), key=f"tabla_clientes_manual_{order}", max_height=520)
 
 
 def _statement_table(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -1202,17 +1221,32 @@ def render_manual_portfolio(
         company: Código de empresa o ``TODAS``.
     """
 
-    invoices = db.listar_facturas(None if company == TODAS else company)
-    selected_year, selected_month = _selected_period()
-    _render_kpis(_filter_period(invoices, selected_year, selected_month))
-    st.write("")
+    refresh_column, export_column, _ = st.columns([1.2, 1.4, 3.4])
+    with refresh_column:
+        refreshed = st.button("Actualizar datos", key="actualizar_manual", width="stretch")
+    all_invoices = db.listar_facturas()
+    invoices = [row for row in all_invoices if company == TODAS or row["empresa_codigo"] == company]
+    if refreshed:
+        st.toast("Datos actualizados desde la base de datos.")
+    cards = st.empty()
     if request_invoice:
         st.session_state["dialogo_factura_abierto"] = True
     filters = _render_compact_filters(invoices, company)
-    filtered = _filter_rows(invoices, filters)
+    order = st.session_state.get("orden_facturas_manual", next(iter(SORT_OPTIONS)))
+    filtered = sort_invoices(_filter_rows(invoices, filters), order)
+    with export_column, st.popover("Exportar Excel", width="stretch"):
+        scope = st.radio("Contenido", ["Toda la cartera", "Solo la vista filtrada"], key="exportar_alcance_manual")
+        export_rows = all_invoices if scope == "Toda la cartera" else filtered
+        st.caption(f"{len(export_rows)} facturas. Resumen y una hoja por cliente, con totales por empresa.")
+        render_excel_export(export_rows, source="manual", scope=scope, source_note="Fuente: cartera manual de NOVASALUM.")
+    with cards.container():
+        _render_kpis(filtered)
+        st.write("")
 
     general_tab, customers_tab = st.tabs(["General", "Clientes y saldo pendiente"])
     with general_tab:
+        render_portfolio_charts(filtered, key="analisis_manual")
+        st.write("")
         render_section(
             f"Cartera manual · {company_name(company)}",
             f"{len(filtered)} factura(s) visible(s) · los saldos se actualizan al aplicar un abono.",
@@ -1221,7 +1255,7 @@ def render_manual_portfolio(
         if filtered:
             table = _invoices_table(filtered)
             event = _render_grid(
-                table, key="tabla_cartera_general", edit_on_double_click=True
+                table, key=f"tabla_cartera_general_{order}", edit_on_double_click=True, max_height=620
             )
             gesto = _consume_invoice_edit_event(event, filtered)
             if gesto is not None:
@@ -1241,7 +1275,7 @@ def render_manual_portfolio(
                 st.success("Muestra cargada. Puedes editarla, registrar abonos y revisar la conciliación.")
                 st.rerun()
     with customers_tab:
-        _render_customer_debt(company, _filter_customers(invoices, filters.customers))
+        _render_customer_debt(company, filtered)
         st.write("")
         payment_from_detail = _render_customer_detail(invoices, filters)
     edit_invoice_id = st.session_state.get(CLAVE_FACTURA_EN_EDICION)
