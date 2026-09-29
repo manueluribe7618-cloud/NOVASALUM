@@ -191,15 +191,15 @@ def revisar_fortaleza(clave: str) -> None:
 
 
 def normalizar_usuario(valor: Any) -> str:
-    """Los nombres de usuario no distinguen mayúsculas ni llevan espacios.
+    """Los nombres de usuario no distinguen mayúsculas ni tildes ni llevan espacios.
 
-    Admiten tildes y ñ: «Martín» con la tilde pegada o suelta, en mayúsculas o
-    minúsculas, es siempre el mismo usuario.
+    Admiten tildes y ñ, pero no cuentan: «Martín», «MARTIN» y «martin» (con la
+    tilde pegada, suelta o sin ella) son siempre el mismo usuario, así nadie
+    queda por fuera por digitarlo distinto desde el celular.
     """
 
-    texto = unicodedata.normalize(
-        "NFC", unicodedata.normalize("NFD", str(valor or "").strip()).casefold()
-    )
+    descompuesto = unicodedata.normalize("NFKD", str(valor or "").strip().casefold())
+    texto = "".join(c for c in descompuesto if not unicodedata.combining(c))
     if not texto:
         raise ErrorAcceso("El usuario es obligatorio.")
     if not re.fullmatch(r"[\w.-]{3,40}", texto):

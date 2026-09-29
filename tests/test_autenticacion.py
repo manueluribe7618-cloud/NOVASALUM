@@ -70,17 +70,25 @@ class ContrasenasTests(BaseTemporal):
 
     def test_el_usuario_admite_tildes_y_enie_escritas_de_cualquier_forma(self) -> None:
         # "i" + tilde suelta (U+0301) es como llegan algunos teclados y copias.
-        for escrito in ("Martín", "MARTÍN", "  martín ", "MARTÍN"):
-            self.assertEqual(auth.normalizar_usuario(escrito), "martín", escrito)
-        self.assertEqual(auth.normalizar_usuario("Núñez"), "núñez")
+        for escrito in ("Martín", "MARTÍN", "  martín ", "MARTÍN", "martin", "MARTIN"):
+            self.assertEqual(auth.normalizar_usuario(escrito), "martin", escrito)
+        for escrito in ("Núñez", "NUÑEZ", "nuñez", "nunez"):
+            self.assertEqual(auth.normalizar_usuario(escrito), "nunez", escrito)
 
     def test_con_tilde_en_secrets_entra_como_sea_que_se_digite(self) -> None:
         credencial = auth.credencial_desde_secretos(
             {"acceso": {"usuario": "Martín", "contrasena": CLAVE}}
         )
-        for escrito in ("martín", "MARTÍN", "martín"):
+        for escrito in ("martín", "MARTÍN", "martín", "martin", "MARTIN"):
             identidad = auth.autenticar(escrito, CLAVE, ruta=self.ruta, credencial=credencial)
-            self.assertEqual(identidad.usuario, "martín")
+            self.assertEqual(identidad.usuario, "martin")
+
+    def test_un_usuario_creado_con_enie_entra_sin_ella(self) -> None:
+        """Desde el celular es fácil escribir «Nunez»: no debe quedar por fuera."""
+
+        auth.crear_usuario("Núñez", CLAVE, ruta=self.ruta)
+        for escrito in ("NUÑEZ", "núñez", "Nunez"):
+            self.assertEqual(auth.autenticar(escrito, CLAVE, ruta=self.ruta).usuario, "nunez")
 
 
 class IngresoTests(BaseTemporal):
