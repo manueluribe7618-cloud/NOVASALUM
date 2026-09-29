@@ -122,6 +122,20 @@ class PuertaDeAccesoTests(unittest.TestCase):
             self.assertFalse(prueba.exception)
             self.assertEqual(prueba.session_state["usuario_sesion"].usuario, "martin")
 
+    def test_un_usuario_con_tilde_en_secrets_puede_entrar(self) -> None:
+        """Regresión: «martín» dejaba Entrar deshabilitado y el aviso decía «letras»."""
+
+        prueba = AppTest.from_file(str(Path(RAIZ) / "app.py"), default_timeout=90)
+        prueba.secrets["acceso"] = {"usuario": "Martín", "contrasena": CLAVE}
+        prueba.run()
+        self.assertFalse(prueba.info)
+        self.assertFalse(prueba.button[0].disabled)
+        prueba.text_input(key="ingreso_usuario").set_value("MARTÍN")
+        prueba.text_input(key="ingreso_clave").set_value(CLAVE)
+        prueba.button[0].click().run()
+        self.assertFalse(prueba.exception, prueba.exception)
+        self.assertEqual(prueba.session_state["usuario_sesion"].usuario, "martín")
+
     def test_cambiar_secrets_cierra_sesion_y_rechaza_la_clave_anterior(self) -> None:
         prueba = self._app()
         prueba.text_input(key="ingreso_usuario").set_value("martin")

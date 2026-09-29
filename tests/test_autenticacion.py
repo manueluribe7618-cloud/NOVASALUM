@@ -62,6 +62,26 @@ class ContrasenasTests(BaseTemporal):
             with self.assertRaises(auth.ErrorAcceso, msg=malo):
                 auth.normalizar_usuario(malo)
 
+    def test_el_mensaje_de_formato_dice_la_regla_real(self) -> None:
+        with self.assertRaises(auth.ErrorAcceso) as contexto:
+            auth.normalizar_usuario("Martín Uribe")
+        self.assertIn("sin espacios", str(contexto.exception))
+        self.assertIn("con o sin tilde", str(contexto.exception))
+
+    def test_el_usuario_admite_tildes_y_enie_escritas_de_cualquier_forma(self) -> None:
+        # "i" + tilde suelta (U+0301) es como llegan algunos teclados y copias.
+        for escrito in ("Martín", "MARTÍN", "  martín ", "MARTÍN"):
+            self.assertEqual(auth.normalizar_usuario(escrito), "martín", escrito)
+        self.assertEqual(auth.normalizar_usuario("Núñez"), "núñez")
+
+    def test_con_tilde_en_secrets_entra_como_sea_que_se_digite(self) -> None:
+        credencial = auth.credencial_desde_secretos(
+            {"acceso": {"usuario": "Martín", "contrasena": CLAVE}}
+        )
+        for escrito in ("martín", "MARTÍN", "martín"):
+            identidad = auth.autenticar(escrito, CLAVE, ruta=self.ruta, credencial=credencial)
+            self.assertEqual(identidad.usuario, "martín")
+
 
 class IngresoTests(BaseTemporal):
     def test_entra_con_la_clave_correcta(self) -> None:
@@ -103,6 +123,21 @@ class IngresoTests(BaseTemporal):
 
 
 class BloqueoPorIntentosTests(BaseTemporal):
+    def _bloquear(self) -> None:
+        for _ in range(auth.MAX_INTENTOS):
+            with self.assertRaises(auth.ErrorAcceso):
+                auth.autenticar("martin", "claveMala123", ruta=self.ruta)
+
+    def _vencer_bloqueo(self) -> None:
+        """Adelanta el reloj poniendo el fin del bloqueo en el pasado."""
+
+        pasado = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
+        with db._transaccion(self.ruta) as conexion:
+            conexion.execute(
+                "UPDATE usuarios SET bloqueado_hasta = ? WHERE usuario = 'martin'",
+                (pasado,),
+            )
+
     def test_el_contador_de_intentos_se_guarda_de_verdad(self) -> None:
         """Regresión: el error se lanzaba dentro de la transacción y el
         ``rollback`` borraba el conteo, así que el bloqueo nunca ocurría."""
@@ -141,17 +176,36 @@ class BloqueoPorIntentosTests(BaseTemporal):
         self.assertEqual(int(auth.listar_usuarios(self.ruta)[0]["intentos_fallidos"]), 0)
 
     def test_el_bloqueo_expira_solo(self) -> None:
-        for _ in range(auth.MAX_INTENTOS):
-            with self.assertRaises(auth.ErrorAcceso):
-                auth.autenticar("martin", "claveMala123", ruta=self.ruta)
-        # Se adelanta el reloj poniendo el fin del bloqueo en el pasado.
-        pasado = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
-        with db._transaccion(self.ruta) as conexion:
-            conexion.execute(
-                "UPDATE usuarios SET bloqueado_hasta = ? WHERE usuario = 'martin'",
-                (pasado,),
-            )
+        self._bloquear()
+        self._vencer_bloqueo()
         self.assertEqual(auth.autenticar("martin", CLAVE, ruta=self.ruta).usuario, "martin")
+
+    def test_al_vencer_el_bloqueo_un_error_no_vuelve_a_bloquear(self) -> None:
+        """Regresión: el contador seguía en 5 y un solo error bloqueaba otros 15 min."""
+
+        self._bloquear()
+        self._vencer_bloqueo()
+        with self.assertRaises(auth.ErrorAcceso) as contexto:
+            auth.autenticar("martin", "claveMala123", ruta=self.ruta)
+        self.assertIn("4 intento(s)", str(contexto.exception))
+        self.assertEqual(auth.autenticar("martin", CLAVE, ruta=self.ruta).usuario, "martin")
+
+    def test_tras_vencer_el_bloqueo_cinco_errores_nuevos_bloquean_otra_vez(self) -> None:
+        """El conteo no se puede quedar en 1 para siempre: la protección sigue."""
+
+        self._bloquear()
+        self._vencer_bloqueo()
+        mensajes = []
+        for _ in range(auth.MAX_INTENTOS):
+            with self.assertRaises(auth.ErrorAcceso) as contexto:
+                auth.autenticar("martin", "claveMala123", ruta=self.ruta)
+            mensajes.append(str(contexto.exception))
+        for restantes, mensaje in zip((4, 3, 2, 1), mensajes):
+            self.assertIn(f"{restantes} intento(s)", mensaje)
+        self.assertIn("bloqueada tras", mensajes[-1])
+        with self.assertRaises(auth.ErrorAcceso) as contexto:
+            auth.autenticar("martin", CLAVE, ruta=self.ruta)
+        self.assertIn("bloqueada por intentos", str(contexto.exception))
 
     def test_desbloquear_devuelve_el_acceso(self) -> None:
         for _ in range(auth.MAX_INTENTOS):
