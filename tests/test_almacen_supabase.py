@@ -25,7 +25,9 @@ class SeleccionDeMotorTests(unittest.TestCase):
             self.assertIn("SQLite local", db.descripcion_almacen())
 
     def test_con_llave_y_sin_ruta_se_usa_postgres(self) -> None:
-        with patch.dict("os.environ", {"SUPABASE_DB_URL": "postgresql://u:p@host/db"}):
+        # NOVASALUM_DB vacía: si el entorno de quien corre las pruebas la
+        # define (lo recomendado), ganaría sobre la nube y la prueba fallaría.
+        with patch.dict("os.environ", {"SUPABASE_DB_URL": "postgresql://u:p@host/db", "NOVASALUM_DB": ""}):
             self.assertTrue(db._usa_postgres(None))
             self.assertEqual(db.descripcion_almacen(), "Supabase (nube)")
 
