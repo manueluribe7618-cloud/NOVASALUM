@@ -1307,7 +1307,8 @@ def render_manual_portfolio(
         scope = st.radio("Contenido", ["Toda la cartera", "Solo la vista filtrada"], key="exportar_alcance_manual")
         export_rows = all_invoices if scope == "Toda la cartera" else filtered
         st.caption(f"{len(export_rows)} facturas. Resumen y una hoja por cliente, con totales por empresa.")
-        render_excel_export(export_rows, source="manual", scope=scope, source_note="Fuente: cartera manual de NOVASALUM.")
+        render_excel_export(export_rows, source="manual", scope=scope, source_note="Fuente: cartera manual de NOVASALUM.",
+                            order=order)
     with cards.container():
         _render_kpis(filtered)
         st.write("")
