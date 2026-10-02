@@ -67,6 +67,18 @@ class OpcionesDeClienteTests(unittest.TestCase):
         opciones = _customer_options(facturas)
         self.assertEqual(list(opciones.values()), ["acme sas"])
 
+    def test_espacios_repetidos_dentro_del_nombre_no_parten_al_cliente(self) -> None:
+        facturas = [
+            _factura(id=1, cliente="Acme  SAS", saldo_cop=100_000),
+            _factura(id=2, cliente="ACME SAS", empresa_codigo="LUAC", saldo_cop=200_000),
+        ]
+        self.assertEqual(_customer_options(facturas), {"Acme SAS": "acme sas"})
+        tabla = _customer_debt_table(facturas)
+        self.assertEqual(tabla["Cliente"].tolist(), ["Acme SAS"])
+        self.assertEqual(tabla["_saldo"].tolist(), [300_000])
+        filas = _filter_rows(facturas, _sin_filtros(("acme sas",)))
+        self.assertEqual([fila["id"] for fila in filas], [1, 2])
+
 
 class FiltroPorClienteTests(unittest.TestCase):
     def setUp(self) -> None:

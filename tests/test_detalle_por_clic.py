@@ -17,6 +17,7 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from src import database as db
+from src.formato import hoy_colombia
 from src.views import manual
 
 
@@ -142,6 +143,42 @@ class ElClicAbreElDetalle(unittest.TestCase):
         self.assertEqual(
             app.session_state["detalle_cliente_manual"], "Transportes Andinos SAS"
         )
+
+
+class AbonoAquiAlcanzaTodasLasFacturas(unittest.TestCase):
+    """El detalle suma por razón social; el abono debe cubrir lo mismo que muestra."""
+
+    def setUp(self) -> None:
+        self.temporal = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporal.cleanup)
+        ruta = Path(self.temporal.name) / "cartera.db"
+        entorno = patch.dict("os.environ", {"NOVASALUM_DB": str(ruta)})
+        entorno.start()
+        self.addCleanup(entorno.stop)
+        # LUAC lo escribió de una forma; la segunda factura usa la grafía que
+        # ofrece el autocompletado, que viene de NOVASA.
+        for empresa, prefijo, numero, cliente, subtotal in (
+            ("LUAC", "LUA", "1", "Transportes Andinos SAS", 300_000),
+            ("NOVASA", "FEBA", "1", "TRANSPORTES ANDINOS SAS", 100_000),
+            ("LUAC", "LUA", "2", "TRANSPORTES ANDINOS SAS", 200_000),
+        ):
+            db.crear_factura(
+                {
+                    "empresa_codigo": empresa, "prefijo": prefijo, "numero": numero,
+                    "fecha": hoy_colombia(), "cliente": cliente, "subtotal_cop": subtotal,
+                }
+            )
+
+    def test_el_abono_desde_el_detalle_ve_las_dos_facturas_de_la_empresa(self) -> None:
+        app = AppTest.from_string(ElClicAbreElDetalle.GUION).run()
+        app.selectbox(key="detalle_cliente_manual").set_value("Transportes Andinos SAS").run()
+        self.assertFalse(app.exception)
+        app.button(key="abono_detalle_LUAC").click().run()
+        self.assertFalse(app.exception)
+        preseleccion = app.session_state["abono_preseleccion"]
+        pendientes = db.facturas_pendientes_cliente("LUAC", preseleccion["cliente_id"])
+        self.assertEqual(sorted(f["factura"] for f in pendientes), ["LUA1", "LUA2"])
+        self.assertEqual(sum(f["saldo_cop"] for f in pendientes), 500_000)
 
 
 if __name__ == "__main__":

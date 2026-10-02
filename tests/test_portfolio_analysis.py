@@ -201,6 +201,44 @@ class PortfolioUiTests(unittest.TestCase):
         self.assertEqual(app.session_state["visible_ids"], [2])
         self.assertEqual(app.session_state["export_ids"], [2])
 
+    def test_the_previous_confirmation_is_shown_once_after_the_rerun(self):
+        app = AppTest.from_function(manual_app, default_timeout=40)
+        app.session_state["aviso_manual"] = "Factura registrada."
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual([toast.value for toast in app.toast], ["Factura registrada."])
+        self.assertNotIn("aviso_manual", app.session_state)
+        app.run()
+        self.assertEqual([toast.value for toast in app.toast], [])
+
+
+def empty_manual_app():
+    from unittest.mock import patch
+    from src.views import manual
+
+    with patch.object(manual.db, "listar_facturas", lambda code=None: []), \
+            patch.object(manual.db, "hay_datos", return_value=False), \
+            patch.object(manual.db, "_conexion_pg", side_effect=AssertionError("sin red")), \
+            patch.object(manual, "_render_grid", lambda table, **kwargs: None), \
+            patch.object(manual, "render_excel_export", lambda rows, **kwargs: None):
+        manual.render_manual_portfolio("TODAS")
+
+
+class DemoDataTests(unittest.TestCase):
+    def test_demo_button_only_exists_on_the_local_database(self):
+        from unittest.mock import patch
+
+        cases = (
+            ({"SUPABASE_DB_URL": ""}, True),
+            ({"SUPABASE_DB_URL": "postgresql://u:p@host/db", "NOVASALUM_DB": ""}, False),
+        )
+        for environment, expected in cases:
+            with self.subTest(environment=environment), patch.dict("os.environ", environment):
+                app = AppTest.from_function(empty_manual_app, default_timeout=40).run()
+                self.assertFalse(app.exception)
+                labels = [button.label for button in app.button]
+                self.assertEqual("Cargar datos de demostración" in labels, expected)
+
 
 if __name__ == "__main__":
     unittest.main()
