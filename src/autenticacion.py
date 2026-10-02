@@ -37,6 +37,7 @@ from pathlib import Path
 import re
 import secrets
 from typing import Any, Mapping
+import unicodedata
 
 from src.database import ErrorCartera, _lectura, _transaccion, _insertar, inicializar
 
@@ -190,15 +191,21 @@ def revisar_fortaleza(clave: str) -> None:
 
 
 def normalizar_usuario(valor: Any) -> str:
-    """Los nombres de usuario no distinguen mayúsculas ni llevan espacios."""
+    """Los nombres de usuario no distinguen mayúsculas ni tildes ni llevan espacios.
 
-    texto = str(valor or "").strip().casefold()
+    Admiten tildes y ñ, pero no cuentan: «Martín», «MARTIN» y «martin» (con la
+    tilde pegada, suelta o sin ella) son siempre el mismo usuario, así nadie
+    queda por fuera por digitarlo distinto desde el celular.
+    """
+
+    descompuesto = unicodedata.normalize("NFKD", str(valor or "").strip().casefold())
+    texto = "".join(c for c in descompuesto if not unicodedata.combining(c))
     if not texto:
         raise ErrorAcceso("El usuario es obligatorio.")
-    if not re.fullmatch(r"[a-z0-9._-]{3,40}", texto):
+    if not re.fullmatch(r"[\w.-]{3,40}", texto):
         raise ErrorAcceso(
-            "El usuario debe tener entre 3 y 40 caracteres: letras, números, "
-            "punto, guion o guion bajo."
+            "El usuario debe tener entre 3 y 40 caracteres, sin espacios: "
+            "letras (con o sin tilde), números, punto, guion o guion bajo."
         )
     return texto
 
@@ -431,7 +438,9 @@ def autenticar(
             )
 
         elif not verificar_clave(clave, datos["clave_hash"]):
-            fallidos = int(datos["intentos_fallidos"]) + 1
+            # Aquí un bloqueo_hasta con valor ya venció: el conteo vuelve a cero.
+            previos = 0 if datos["bloqueado_hasta"] else int(datos["intentos_fallidos"])
+            fallidos = previos + 1
             if fallidos >= MAX_INTENTOS:
                 hasta = (
                     datetime.now().astimezone() + timedelta(minutes=MINUTOS_BLOQUEO)
@@ -451,7 +460,11 @@ def autenticar(
                 )
             else:
                 conexion.execute(
-                    "UPDATE usuarios SET intentos_fallidos = ?, actualizado_en = ? WHERE id = ?",
+                    """
+                    UPDATE usuarios
+                    SET intentos_fallidos = ?, bloqueado_hasta = NULL, actualizado_en = ?
+                    WHERE id = ?
+                    """,
                     (fallidos, _ahora(), int(datos["id"])),
                 )
                 _registrar_intento(conexion, nombre_usuario, False, "CLAVE_INCORRECTA")

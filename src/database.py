@@ -15,9 +15,11 @@ from datetime import date, datetime, timedelta
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import threading
 from typing import Any, Iterator, Mapping, Sequence
+from urllib.parse import quote, unquote
 
 from src.formato import MAXIMO_COP, clave_nombre, fmt_cop, hoy_colombia
 
@@ -124,6 +126,34 @@ def descripcion_almacen() -> str:
     return f"SQLite local · {_ruta_base().name}"
 
 
+_CERTIFICADO_SUPABASE = Path(__file__).resolve().parent.parent / "certs" / "supabase-root-2021-ca.pem"
+
+
+# host[:puerto][/base[?clave=valor&…]]: solo los valores de los parámetros admiten @.
+_DESTINO_PG = re.compile(r"[^@/?#\s]+(/[^@?#\s]*(\?[^@=&#\s]+=[^&#\s]*(&[^@=&#\s]+=[^&#\s]*)*)?)?")
+
+
+def _separar_clave(url: str) -> tuple[str, str | None]:
+    """Saca la contraseña de la URL para que libpq nunca la lea ni la repita.
+
+    libpq copia en sus mensajes de error el pedazo de URL que no entiende, y
+    una contraseña con @ / ? # o espacios sin codificar terminaba en pantalla.
+    Se corta en la primera @ tras la cual queda un destino válido, así esa
+    contraseña igual conecta y una @ en los parámetros no se confunde con la
+    suya. Lo que venga codificado (%40, %25…) se decodifica como lo haría libpq.
+    """
+
+    esquema, barras, resto = url.partition("://")
+    arrobas = [posicion for posicion, caracter in enumerate(resto) if caracter == "@"]
+    if not (barras and arrobas):
+        return url, None
+    corte = next((i for i in arrobas if _DESTINO_PG.fullmatch(resto[i + 1:])), arrobas[-1])
+    usuario, dos_puntos, clave = resto[:corte].partition(":")
+    if not dos_puntos:
+        return url, None
+    return f"{esquema}://{usuario}@{resto[corte + 1:]}", unquote(clave)
+
+
 def _url_con_tls(url: str) -> str:
     """Garantiza TLS verificado con la CA de Supabase si la URL no lo trae.
 
@@ -140,7 +170,7 @@ def _url_con_tls(url: str) -> str:
     if "sslmode=" in url:
         return url
     separador = "&" if "?" in url else "?"
-    certificado = Path(__file__).resolve().parent.parent / "certs" / "supabase-root-2021-ca.pem"
+    certificado = _CERTIFICADO_SUPABASE
     if not certificado.exists():
         raise ErrorCartera(
             "Falta el certificado raíz de Supabase en "
@@ -148,7 +178,8 @@ def _url_con_tls(url: str) -> str:
             "cartera viajaría sin comprobar quién está al otro lado. "
             "Restaura el archivo desde el repositorio y vuelve a intentarlo."
         )
-    return f"{url}{separador}sslmode=verify-full&sslrootcert={certificado}"
+    # Codificada: una carpeta con espacios o # rompía la URL y no conectaba.
+    return f"{url}{separador}sslmode=verify-full&sslrootcert={quote(str(certificado))}"
 
 
 class _ConexionPG:
@@ -201,13 +232,26 @@ def _conexion_pg() -> _ConexionPG:
             except Exception:
                 pass
             _CONEXION_PG = None
-    _CONEXION_PG = psycopg.connect(
-        _url_con_tls(url_supabase()),
-        autocommit=True,
-        row_factory=dict_row,
-        prepare_threshold=None,  # necesario con el pooler de Supabase
-        connect_timeout=15,
-    )
+    url, clave = _separar_clave(url_supabase())
+    try:
+        _CONEXION_PG = psycopg.connect(
+            _url_con_tls(url),
+            autocommit=True,
+            row_factory=dict_row,
+            prepare_threshold=None,  # necesario con el pooler de Supabase
+            connect_timeout=15,
+            **({} if clave is None else {"password": clave}),
+        )
+    except psycopg.ProgrammingError:
+        # Estos errores repiten la URL tal cual: no se muestra ni un pedazo.
+        raise ErrorCartera(
+            "La dirección guardada en SUPABASE_DB_URL no tiene un formato "
+            "válido. Cópiala de nuevo desde Supabase (Connect → Transaction "
+            "pooler) y cambia solo [YOUR-PASSWORD] por la contraseña."
+        ) from None
+    except psycopg.Error as exc:
+        detalle = str(exc).replace(clave, "••••") if clave else str(exc)
+        raise ErrorCartera(f"La conexión con Supabase falló: {detalle}") from None
     return _ConexionPG(_CONEXION_PG)
 
 

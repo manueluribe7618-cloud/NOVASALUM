@@ -85,15 +85,19 @@ def run_application() -> None:
     try:
         db.inicializar()
     except Exception as exc:
+        # Esta pantalla la ve cualquiera antes del ingreso: solo mensajes
+        # propios, nunca el texto de un error ajeno que pueda traer la URL.
+        detalle = str(exc) if isinstance(exc, db.ErrorCartera) else type(exc).__name__
         st.error(
             "No fue posible conectar con la base de datos "
-            f"({db.descripcion_almacen()}). Detalle: {exc}"
+            f"({db.descripcion_almacen()}). Detalle: {detalle}"
         )
         st.info(
             "Revisa la llave SUPABASE_DB_URL en los secretos, o retírala para "
-            "trabajar con la base local mientras tanto. Ninguna factura se "
-            "pierde por este aviso: simplemente no se puede leer ni guardar "
-            "hasta restablecer la conexión."
+            "trabajar con la base local mientras tanto. Si la contraseña tiene "
+            "el signo %, escríbelo como %25. Ninguna factura se pierde por "
+            "este aviso: simplemente no se puede leer ni guardar hasta "
+            "restablecer la conexión."
         )
         st.stop()
 
