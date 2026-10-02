@@ -12,10 +12,13 @@ import unittest
 
 import pandas as pd
 
+from src.formato import hoy_colombia
 from src.siigo_vista import (
     COLUMNAS_ESTADO_CUENTA,
     COLUMNAS_GENERAL,
     buscar_filas,
+    clave_cliente,
+    etiqueta_cliente,
     etiqueta_estado,
     fecha_visible,
     filas_de_dataframe,
@@ -24,6 +27,7 @@ from src.siigo_vista import (
     money_blanco,
     money_kpi,
     ordenar_filas,
+    saldo_visible,
     suma_auditable,
     tabla_clientes,
     tabla_estado_cuenta,
@@ -68,9 +72,12 @@ class FormatoDeDineroTests(unittest.TestCase):
         self.assertEqual(money_blanco(None), "—")
         self.assertEqual(money_blanco(190_000), "$ 190.000")
 
-    def test_money_kpi_no_deja_la_tarjeta_en_blanco(self) -> None:
-        self.assertEqual(money_kpi(float("nan")), "—")
-        self.assertEqual(money_kpi(0), "—")
+    def test_money_kpi_solo_pone_raya_si_ninguna_fila_trae_el_dato(self) -> None:
+        # Todas las facturas visibles traen saldo 0 informado por Siigo: es
+        # un cero conocido, no «no se sabe».
+        self.assertEqual(money_kpi(0.0, 0, 1), "$ 0")
+        self.assertEqual(money_kpi(0.0, 2, 2), "—")
+        self.assertEqual(money_kpi(500_000.0, 1, 2), "$ 500.000")
 
     def test_sin_centavos(self) -> None:
         self.assertEqual(money(1_500_000.49), "$ 1.500.000")
@@ -146,7 +153,7 @@ class TablasTests(unittest.TestCase):
         self.assertNotIn("Estado", visible.index)
         self.assertEqual(
             visible["Días en cartera"],
-            max(0, (dt.date.today() - dt.date.fromisoformat(fila["fecha"])).days),
+            max(0, (hoy_colombia() - dt.date.fromisoformat(fila["fecha"])).days),
         )
         # La columna Estado se reemplazó por «Días en cartera» el 2026-09-15;
         # la señal de honestidad de una factura sin leer son las rayas de
@@ -209,6 +216,83 @@ class TotalesTests(unittest.TestCase):
             _fila(moneda="USD", saldo_siigo=999.0),
         ]
         self.assertTrue(tabla_clientes(filas).empty)
+
+    def test_un_saldo_negativo_no_se_resta_en_ningun_total(self) -> None:
+        # FEBA5 viene con saldo -200.000 («Por revisar»): la tarjeta lo restaba
+        # y la tabla de clientes y las gráficas no; cada vista decía otra cifra.
+        filas = [
+            _fila(factura="FEBA4", saldo_siigo=1_000_000.0),
+            _fila(factura="FEBA5", saldo_siigo=-200_000.0, estado_siigo="DATO_INCOMPLETO"),
+        ]
+        self.assertEqual(suma_auditable(filas, "saldo_siigo"), (1_000_000.0, 1))
+        self.assertEqual(tabla_clientes(filas).iloc[0]["Saldo pendiente"], "$ 1.000.000")
+        self.assertEqual(
+            [f["factura"] for f in filtrar_saldo(filas, "Saldo sin dato")], ["FEBA5"]
+        )
+
+
+class ClaveDelClienteTests(unittest.TestCase):
+    def test_dos_cedulas_de_diez_digitos_son_dos_clientes(self) -> None:
+        filas = [
+            _fila(factura="FEBA1", cliente="Juan Perez", nit="1098765432",
+                  identificacion="1098765432", saldo_siigo=1_000_000.0),
+            _fila(empresa_codigo="LUAC", factura="LUA1", cliente="Pedro Gomez",
+                  nit="1098765439", identificacion="1098765439", saldo_siigo=2_000_000.0),
+        ]
+        self.assertNotEqual(clave_cliente(filas[0]), clave_cliente(filas[1]))
+        tabla = tabla_clientes(filas)
+        self.assertEqual(
+            sorted(zip(tabla["Cliente"], tabla["Saldo pendiente"])),
+            [("Juan Perez", "$ 1.000.000"), ("Pedro Gomez", "$ 2.000.000")],
+        )
+
+    def test_la_misma_cedula_con_y_sin_dv_es_el_mismo_cliente(self) -> None:
+        sin_dv = _fila(nit="79123456", identificacion="79123456")
+        con_dv = _fila(nit="79123456-3", identificacion="79123456")
+        self.assertEqual(clave_cliente(sin_dv), clave_cliente(con_dv))
+        # Sin la columna nueva (lecturas anteriores) el DV del NIT tampoco entra.
+        self.assertEqual(clave_cliente({"nit": "79123456-3"}), "nit:79123456")
+        self.assertNotEqual(clave_cliente({"nit": "79123456-3"}), clave_cliente({"nit": "791234563"}))
+
+    def test_la_etiqueta_distingue_homonimos_por_nit(self) -> None:
+        self.assertEqual(
+            etiqueta_cliente([_fila(cliente="Transportes XYZ SAS", nit="900111222-1")]),
+            "Transportes XYZ SAS · NIT 900111222-1",
+        )
+        self.assertEqual(etiqueta_cliente([_fila(cliente="", nit="")]), "—")
+
+
+class OtraMonedaTests(unittest.TestCase):
+    def test_los_dolares_llevan_su_codigo_y_no_el_signo_de_pesos(self) -> None:
+        fila = _fila(factura="MSU650", moneda="USD", subtotal_siigo=2_000.0,
+                     retefuente_siigo=0.0, total_siigo=2_000.0, saldo_siigo=2_000.0)
+        general = tabla_general([fila]).iloc[0]
+        self.assertEqual(general["Subtotal"], "USD 2.000")
+        self.assertEqual(general["Saldo"], "USD 2.000")
+        cuenta = tabla_estado_cuenta([fila]).iloc[0]
+        self.assertEqual(cuenta["Saldo pendiente"], "USD 2.000")
+        self.assertEqual(cuenta["Retención"], "")
+        self.assertEqual(tabla_general([_fila()]).iloc[0]["Saldo"], "$ 810.000")
+
+
+class SaldoVisibleTests(unittest.TestCase):
+    def test_sin_ningun_saldo_leido_es_raya_y_no_cero(self) -> None:
+        self.assertEqual(saldo_visible([_fila(saldo_siigo=None)]), "—")
+
+    def test_si_faltan_algunos_lo_dice(self) -> None:
+        self.assertEqual(
+            saldo_visible([_fila(), _fila(saldo_siigo=None)]),
+            "$ 810.000 · 1 sin saldo leído",
+        )
+
+    def test_otra_moneda_va_aparte_y_la_anulada_no_suma(self) -> None:
+        filas = [
+            _fila(saldo_siigo=610_000.0),
+            _fila(moneda="USD", saldo_siigo=2_000.0),
+            _fila(estado_siigo="ANULADA", saldo_siigo=1_500_000.0),
+        ]
+        self.assertEqual(saldo_visible(filas), "$ 610.000 · USD 2.000")
+        self.assertEqual(saldo_visible([_fila(saldo_siigo=0.0)]), "$ 0")
 
 
 class FiltrosTests(unittest.TestCase):

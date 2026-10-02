@@ -27,6 +27,8 @@ ESTADO_META = {
     "DIFERENCIA_IMPUESTOS": ("Diferencia impuestos", "amarillo"),
     "DESCUADRE": ("Descuadre", "rojo"),
     "DATO_INCOMPLETO": ("Falta dato de Siigo", "gris"),
+    "ANULADA_EN_UNA_FUENTE": ("Anulada en una sola fuente", "rojo"),
+    "OTRA_MONEDA": ("Otra moneda", "gris"),
     "SOLO_MANUAL": ("Solo manual", "rojo"),
     "SOLO_SIIGO": ("Solo Siigo", "rojo"),
 }

@@ -18,7 +18,10 @@ import streamlit as st
 
 from src import database as db
 from src.cartera_siigo import normalizar_factura
+from src.siigo_muestra import ORIGEN_MUESTRA
+from src.siigo_vista import es_cop, etiqueta_estado, money_fila
 from src.ui.components import (
+    EMPRESAS,
     ESTADO_META,
     TODAS,
     as_integer,
@@ -26,6 +29,8 @@ from src.ui.components import (
     render_kpi_card,
     render_section,
 )
+
+
 def _siigo_row_as_dict(
     row: pd.Series | Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -91,6 +96,17 @@ def _build_reconciliation(
     for company, invoice_key in sorted(set(manual_by_invoice) | set(siigo_by_invoice)):
         manual = manual_by_invoice.get((company, invoice_key))
         official = siigo_by_invoice.get((company, invoice_key))
+        manual_annulled = manual is not None and (
+            str(manual.get("estado") or "").upper() == "ANULADA" or bool(manual.get("anulada"))
+        )
+        siigo_annulled = official is not None and (
+            str(official.get("estado_siigo") or "").upper() == "ANULADA"
+        )
+        if manual_annulled and (official is None or siigo_annulled):
+            # Anulada en las dos fuentes no hay nada que conciliar. Anulada en
+            # la manual y ausente en Siigo tampoco se afirma como faltante:
+            # no está confirmado que el listado de Siigo incluya las anuladas.
+            continue
         invoice = (manual or official or {}).get("factura", invoice_key)
         customer = (manual or official or {}).get("cliente", "")
         differences: dict[str, int | None] = {
@@ -100,6 +116,11 @@ def _build_reconciliation(
             status = "SOLO_SIIGO"
         elif official is None:
             status = "SOLO_MANUAL"
+        elif manual_annulled or siigo_annulled:
+            status = "ANULADA_EN_UNA_FUENTE"
+        elif not es_cop(official):
+            # Dólares contra pesos no se restan: la diferencia no significaría nada.
+            status = "OTRA_MONEDA"
         else:
             sin_dato: list[str] = []
             for clave, campo_manual, campo_siigo in CONCEPTOS_COMPARADOS:
@@ -142,6 +163,47 @@ def _build_reconciliation(
     return result
 
 
+def _manual_consultado(
+    manual_invoices: list[dict[str, Any]],
+    siigo_invoices: pd.DataFrame,
+    parametros: Any,
+    errores: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], int]:
+    """Deja solo las facturas manuales que la lectura de Siigo alcanzó a buscar.
+
+    Siigo lista por empresa y por fecha de emisión: una factura manual de otro
+    período, de una empresa no elegida o de una empresa cuya consulta falló
+    entera no es «faltante» en Siigo, nadie la buscó allí. Si Siigo sí devolvió
+    la factura, se compara aunque la fecha no coincida. Sin parámetros (la
+    muestra) no hay alcance que aplicar. Devuelve también cuántas quedaron fuera.
+    """
+
+    claves_siigo: set[tuple[str, str]] = set()
+    if isinstance(siigo_invoices, pd.DataFrame) and not siigo_invoices.empty:
+        claves_siigo = {
+            (str(empresa).strip().upper(), normalizar_factura(factura))
+            for empresa, factura in zip(siigo_invoices["empresa_codigo"], siigo_invoices["factura"])
+        }
+    fallidas = {clave for clave in errores if clave in EMPRESAS}
+    consultadas = []
+    for row in manual_invoices:
+        company = row["empresa_codigo"]
+        if (company, normalizar_factura(row["factura"])) not in claves_siigo:
+            if company in fallidas:
+                continue
+            if parametros is not None:
+                try:
+                    issued = dt.date.fromisoformat(str(row.get("fecha"))[:10])
+                except ValueError:
+                    continue
+                if company not in parametros.empresas or not (
+                    parametros.desde <= issued <= parametros.hasta
+                ):
+                    continue
+        consultadas.append(row)
+    return consultadas, len(manual_invoices) - len(consultadas)
+
+
 def _format_difference(value: int | None) -> str:
     return "—" if value is None else format_currency(value)
 
@@ -168,18 +230,20 @@ def _render_comparison_side(
         )
         return
     is_siigo = kind == "siigo"
+    state = etiqueta_estado(row) if is_siigo else ESTADO_META.get(row.get("estado"), ("—",))[0]
     fields = [
         ("Cliente", row.get("cliente", "—")),
         ("Fecha", _visible_date(row.get("fecha"))),
-        ("Subtotal", format_currency(row.get("subtotal_siigo" if is_siigo else "subtotal_cop"))),
-        ("IVA", format_currency(row.get("iva_siigo" if is_siigo else "iva_cop"))),
+        ("Estado", state),
+        ("Subtotal", money_fila(row, row.get("subtotal_siigo" if is_siigo else "subtotal_cop"))),
+        ("IVA", money_fila(row, row.get("iva_siigo" if is_siigo else "iva_cop"))),
         (
             "Retefuente",
-            format_currency(row.get("retefuente_siigo" if is_siigo else "retefuente_cop")),
+            money_fila(row, row.get("retefuente_siigo" if is_siigo else "retefuente_cop")),
         ),
-        ("ICA", format_currency(row.get("reteica_siigo" if is_siigo else "ica_cop"))),
-        ("Descuento", format_currency(row.get("descuento_siigo" if is_siigo else "descuento_cop"))),
-        ("Saldo", format_currency(row.get("saldo_siigo" if is_siigo else "saldo_cop"))),
+        ("ICA", money_fila(row, row.get("reteica_siigo" if is_siigo else "ica_cop"))),
+        ("Descuento", money_fila(row, row.get("descuento_siigo" if is_siigo else "descuento_cop"))),
+        ("Saldo", money_fila(row, row.get("saldo_siigo" if is_siigo else "saldo_cop"))),
     ]
     detail = row.get("descripcion_siigo", "") if is_siigo else row.get("descripcion", "")
     content = "".join(
@@ -212,32 +276,72 @@ def render_reconciliation(company: str) -> None:
         )
         st.markdown("</div>", unsafe_allow_html=True)
         return
-    manual_invoices = db.listar_facturas(None if company == TODAS else company)
+    reporte = st.session_state.get("siigo_reporte")
+    parametros = getattr(reporte, "parametros", None)
+    errores = st.session_state.get("siigo_errores") or {}
+    origen = st.session_state.get("siigo_origen") or "origen desconocido"
+    consultado_en = st.session_state.get("siigo_consultado_en")
+    es_muestra = origen == ORIGEN_MUESTRA
+
     filtered_siigo = siigo_invoices.copy()
     if company != TODAS and "empresa_codigo" in filtered_siigo.columns:
         filtered_siigo = filtered_siigo[
             filtered_siigo["empresa_codigo"].astype(str).str.upper().eq(company.upper())
         ].copy()
-    # Una factura cuyo detalle no se leyó trae los impuestos en cero por
-    # ausencia del dato, no porque valgan cero: compararla produciría
-    # diferencias inventadas. Se excluye y se avisa cuántas quedaron fuera.
+    # Una factura cuyo detalle no se leyó puede traer conceptos en cero por
+    # ausencia del dato, no porque valgan cero. Se deja en el cruce con sus
+    # conceptos en blanco: sale «Falta dato de Siigo», nunca «Solo manual».
     sin_detalle = 0
     if "lectura_completa" in filtered_siigo.columns and not filtered_siigo.empty:
         completas = filtered_siigo["lectura_completa"].fillna(True).astype(bool)
         sin_detalle = int((~completas).sum())
-        filtered_siigo = filtered_siigo[completas].copy()
+        for _, _, campo in CONCEPTOS_COMPARADOS:
+            if campo != "saldo_siigo" and campo in filtered_siigo.columns:
+                filtered_siigo[campo] = filtered_siigo[campo].where(completas)
+    manual_invoices, fuera_de_alcance = _manual_consultado(
+        db.listar_facturas(None if company == TODAS else company, incluir_anuladas=True),
+        filtered_siigo,
+        parametros,
+        errores,
+    )
     rows = _build_reconciliation(manual_invoices, filtered_siigo)
-    if sin_detalle:
-        st.info(
-            f"{sin_detalle} factura(s) de Siigo quedan fuera de la comparación porque "
-            "no se pudo leer su detalle. Vuelve a consultar para incluirlas."
-        )
 
     st.markdown('<div class="surface">', unsafe_allow_html=True)
     render_section(
         "Conciliación y auditoría",
         "Cartera manual a la izquierda y lectura de Siigo a la derecha. Marcar una revisión no modifica Siigo.",
     )
+    alcance = [f"Siigo: {origen}"]
+    if isinstance(consultado_en, dt.datetime):
+        alcance.append(f"leída el {consultado_en:%d/%m/%Y %H:%M}")
+    if parametros is not None:
+        alcance.append(
+            f"emitidas del {parametros.desde:%d/%m/%Y} al {parametros.hasta:%d/%m/%Y}"
+        )
+        alcance.append("empresas " + ", ".join(parametros.empresas))
+    if fuera_de_alcance:
+        alcance.append(
+            f"{fuera_de_alcance} factura(s) manual(es) de otro período o empresa no se comparan"
+        )
+    st.caption(" · ".join(alcance))
+    if es_muestra:
+        st.warning(
+            "Estás comparando contra la muestra de demostración: las cifras de Siigo "
+            "son inventadas. Sirve para recorrer la pantalla; no se pueden guardar revisiones."
+        )
+    fallidas = sorted(
+        clave for clave in errores if clave in EMPRESAS and company in (TODAS, clave)
+    )
+    if fallidas:
+        st.warning(
+            f"No se comparan {', '.join(fallidas)}: su consulta a Siigo falló. "
+            "Vuelve a consultar para incluirlas."
+        )
+    if sin_detalle:
+        st.info(
+            f"{sin_detalle} factura(s) de Siigo no se pudieron leer en detalle: salen "
+            "como «Falta dato de Siigo». Vuelve a consultar para compararlas."
+        )
     counts = {status: sum(1 for row in rows if row["estado"] == status) for status in ESTADO_META}
     kpis = st.columns(4)
     with kpis[0]:
@@ -249,10 +353,12 @@ def render_reconciliation(company: str) -> None:
             "El saldo coincide",
         )
     with kpis[2]:
+        anuladas_en_una = counts["ANULADA_EN_UNA_FUENTE"]
         render_kpi_card(
             "Descuadres",
-            str(counts["DESCUADRE"]),
-            "Saldo diferente entre fuentes",
+            str(counts["DESCUADRE"] + anuladas_en_una),
+            "Saldo diferente entre fuentes"
+            + (f" · {anuladas_en_una} anulada(s) en una sola" if anuladas_en_una else ""),
         )
     with kpis[3]:
         missing = counts["SOLO_MANUAL"] + counts["SOLO_SIIGO"]
@@ -268,6 +374,11 @@ def render_reconciliation(company: str) -> None:
             "Siigo no entregó alguno de sus conceptos. No están cuadradas ni "
             "descuadradas: falta el dato para saberlo."
         )
+    if counts["OTRA_MONEDA"]:
+        st.info(
+            f"{counts['OTRA_MONEDA']} factura(s) de Siigo están en otra moneda: no se "
+            "comparan contra los pesos de la cartera manual."
+        )
     st.write("")
     table = pd.DataFrame(
         [
@@ -279,7 +390,7 @@ def render_reconciliation(company: str) -> None:
                 "Saldo manual": format_currency(row["manual"]["saldo_cop"])
                 if row["manual"]
                 else "—",
-                "Saldo Siigo": format_currency(row["siigo"].get("saldo_siigo"))
+                "Saldo Siigo": money_fila(row["siigo"], row["siigo"].get("saldo_siigo"))
                 if row["siigo"]
                 else "—",
                 "Dif. saldo": _format_difference(row["dif_saldo"]),
@@ -312,7 +423,7 @@ def render_reconciliation(company: str) -> None:
             key=f"observacion_{row['empresa_codigo']}_{row['factura_clave']}",
             max_chars=1500,
         )
-        if st.button("Marcar revisión", type="primary"):
+        if st.button("Marcar revisión", type="primary", disabled=es_muestra) and not es_muestra:
             try:
                 db.guardar_revision_conciliacion(
                     empresa_codigo=row["empresa_codigo"],
