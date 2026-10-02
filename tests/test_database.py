@@ -520,8 +520,8 @@ class UnMismoClienteNoSeDuplica(unittest.TestCase):
         self.assertEqual(db.listar_nombres_clientes(self.ruta), ["Acme SAS"])
 
 
-class LosClientesRepetidosSeUnenAlIniciar(unittest.TestCase):
-    """Una base que ya tiene el cliente partido se arregla sola en inicializar."""
+class LosClientesRepetidosSeUnenSoloConAutorizacion(unittest.TestCase):
+    """Los registros antiguos no se cambian al arrancar o consultar la app."""
 
     def setUp(self) -> None:
         self.temporal = tempfile.TemporaryDirectory()
@@ -568,7 +568,7 @@ class LosClientesRepetidosSeUnenAlIniciar(unittest.TestCase):
             return conexion.execute(sql).fetchall()
 
     def test_une_facturas_y_abonos_en_el_cliente_mas_antiguo(self) -> None:
-        db.inicializar(self.ruta)
+        db.unificar_clientes_repetidos(self.ruta, confirmar=True)
 
         self.assertEqual(
             self.filas("SELECT id, nombre FROM clientes WHERE empresa_codigo = 'LUAC'"),
@@ -591,6 +591,7 @@ class LosClientesRepetidosSeUnenAlIniciar(unittest.TestCase):
         self.assertEqual(json.loads(unificados[0][1])["ids_unidos"], [self.repetido])
 
     def test_abono_aqui_alcanza_todas_las_facturas_del_cliente(self) -> None:
+        db.unificar_clientes_repetidos(self.ruta, confirmar=True)
         clientes = db.clientes_con_saldo("LUAC", self.ruta)
         self.assertEqual(len(clientes), 1)
         self.assertEqual(clientes[0]["saldo_cop"], 1_600_000)
@@ -605,11 +606,64 @@ class LosClientesRepetidosSeUnenAlIniciar(unittest.TestCase):
         self.assertEqual(sobrante, 0)
         self.assertEqual(db.clientes_con_saldo("LUAC", self.ruta), [])
 
-    def test_volver_a_iniciar_no_repite_nada(self) -> None:
-        db.inicializar(self.ruta)
+    def test_volver_a_unificar_no_repite_nada(self) -> None:
+        db.unificar_clientes_repetidos(self.ruta, confirmar=True)
         antes = self.filas("SELECT COUNT(*) FROM auditoria")
-        db.inicializar(self.ruta)
+        db.unificar_clientes_repetidos(self.ruta, confirmar=True)
         self.assertEqual(self.filas("SELECT COUNT(*) FROM auditoria"), antes)
+
+    def test_iniciar_y_leer_conserva_todos_los_registros_antiguos(self) -> None:
+        consultas = [
+            "SELECT * FROM clientes ORDER BY id",
+            "SELECT * FROM facturas_manual ORDER BY id",
+            "SELECT * FROM abonos_manual ORDER BY id",
+            "SELECT * FROM aplicaciones_abono ORDER BY id",
+            "SELECT * FROM auditoria ORDER BY id",
+        ]
+        antes = [self.filas(sql) for sql in consultas]
+        db.inicializar(self.ruta)
+        db.listar_facturas(ruta=self.ruta)
+        db.listar_nombres_clientes(self.ruta)
+        db.clientes_con_saldo("LUAC", self.ruta)
+        self.assertEqual([self.filas(sql) for sql in consultas], antes)
+
+    def test_sin_confirmacion_no_se_toca_ningun_registro(self) -> None:
+        antes = self.filas("SELECT * FROM clientes ORDER BY id")
+        with self.assertRaises(db.ErrorCartera):
+            db.unificar_clientes_repetidos(self.ruta)
+        self.assertEqual(self.filas("SELECT * FROM clientes ORDER BY id"), antes)
+
+    def test_identificaciones_distintas_no_se_unen(self) -> None:
+        with closing(sqlite3.connect(self.ruta)) as conexion:
+            conexion.execute("UPDATE clientes SET nit = 'LEGADO-2' WHERE id = ?", (self.repetido,))
+            conexion.commit()
+        antes = self.filas("SELECT * FROM clientes ORDER BY id")
+        with self.assertRaisesRegex(db.ErrorCartera, "identificaciones distintas"):
+            db.unificar_clientes_repetidos(self.ruta, confirmar=True)
+        self.assertEqual(self.filas("SELECT * FROM clientes ORDER BY id"), antes)
+        self.assertEqual(self.filas("SELECT cliente_id FROM abonos_manual"), [(self.repetido,)])
+
+    def test_error_a_mitad_revierte_facturas_abonos_y_clientes(self) -> None:
+        consultas = [
+            "SELECT * FROM clientes ORDER BY id",
+            "SELECT * FROM facturas_manual ORDER BY id",
+            "SELECT * FROM abonos_manual ORDER BY id",
+            "SELECT * FROM auditoria ORDER BY id",
+        ]
+        antes = [self.filas(sql) for sql in consultas]
+        with patch.object(db, "_registrar", side_effect=RuntimeError("fallo de prueba")):
+            with self.assertRaisesRegex(RuntimeError, "fallo de prueba"):
+                db.unificar_clientes_repetidos(self.ruta, confirmar=True)
+        self.assertEqual([self.filas(sql) for sql in consultas], antes)
+
+    def test_unificacion_explicita_actualiza_lecturas_memorizadas(self) -> None:
+        db.listar_facturas(ruta=self.ruta)
+        # Cada factura conserva su importe, saldo e identidad de factura.
+        antes = {f["id"]: (f["total_cop"], f["saldo_cop"]) for f in db.listar_facturas(ruta=self.ruta)}
+        db.unificar_clientes_repetidos(self.ruta, confirmar=True)
+        despues = db.listar_facturas(ruta=self.ruta)
+        self.assertEqual({f["id"]: (f["total_cop"], f["saldo_cop"]) for f in despues}, antes)
+        self.assertEqual({f["cliente_id"] for f in despues if f["empresa_codigo"] == "LUAC"}, {self.original})
 
 
 class DatosDeDemostracion(unittest.TestCase):

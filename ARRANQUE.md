@@ -174,6 +174,36 @@ no comprueba quién está al otro lado, y por aquí viaja la cartera completa.
 Degradar en silencio sería peor que no conectar. Está cubierto por
 `tests/test_guardas_almacen.py`.
 
+### La cartera no consulta la base en cada clic
+
+Streamlit reejecuta la página entera en cada clic y, contra Supabase, cada
+consulta es un viaje de red. Por eso `src/database.py` guarda lo que devuelven
+`listar_facturas`, `listar_nombres_clientes` y `resumen_actividad` (decorador
+`@_memorizar`) y lo descarta en cuanto una transacción cambia filas. Lo que
+hay que saber antes de tocar la base:
+
+- Toda escritura pasa por `_transaccion`; así se ve de inmediato. Lo que se
+  escriba por otro camino (un script, SQL en el panel de Supabase) aparece al
+  vencer la memoria (60 s) o al pulsar «Actualizar datos», que llama a
+  `invalidar_lecturas()`.
+- Una lectura nueva que se consulte en cada clic debería llevar `@_memorizar`
+  si devuelve datos de la cartera. Las de acceso y seguridad no se memorizan.
+- Está cubierto por `tests/test_memoria_lecturas.py`.
+
+### Los clientes existentes no se fusionan al arrancar
+
+La digitación reutiliza un cliente de la misma empresa cuando solo cambian
+mayúsculas o espacios repetidos. Esto evita nuevos duplicados sin modificar
+las facturas, abonos ni registros de clientes que ya existen.
+
+La herramienta `database.unificar_clientes_repetidos(ruta, confirmar=True)`
+se conserva únicamente para mantenimiento **expresamente autorizado**. No
+la llama el arranque, las consultas ni los formularios. La operación es
+atómica, auditada e invalida las lecturas; se rechaza si hay identificaciones
+antiguas distintas. Antes de ejecutarla sobre datos reales se debe contar con
+respaldo y autorización del dueño o Finanzas. Hasta entonces el detalle puede
+agrupar una razón social, pero el abono distingue los registros por su ID.
+
 ---
 
 ## Cómo trabaja este dueño (importante)

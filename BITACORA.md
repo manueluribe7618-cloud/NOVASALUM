@@ -7,6 +7,116 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-10-01 — Integración de las mejoras pendientes sin perder el historial
+
+- Pedido del dueño: realizar el merge pertinente, conservar las mejoras y
+  dejar todo comiteado. Se parte de `main` actualizado (`d7b87ab`); el remoto
+  estaba en el mismo commit antes de integrar.
+- Se integran, conservando sus commits y sin eliminar sus ramas ni copias de
+  trabajo, las cuatro ramas `worktree-wf_c5f12361-6c6-1` a
+  `worktree-wf_c5f12361-6c6-4` y `rendimiento-supabase`.
+- Excel: estados y vencimiento coherentes con la app, orden de la vista,
+  nombres de hojas seguros y datos adicionales de la lectura Siigo.
+- Manual: abono inicial atómico, validación de importes contra el límite de
+  Postgres, campos opcionales vacíos como cero, selección de abono estable
+  por ID, avisos persistentes, cambio de cliente solo sin abonos y confirmación
+  de anulación. Las muestras quedan limitadas a SQLite y usan prefijo DEMO.
+- Siigo y conciliación: identificación completa de clientes, moneda explícita,
+  anuladas y datos ausentes sin inventar importes; lectura de retenciones de
+  los ítems; comparación limitada al período y empresas consultados. La
+  demostración no permite guardar revisiones como si fuera una lectura real.
+- Acceso y conexión: normalización de usuarios, reinicio correcto del contador
+  tras expirar el bloqueo, contraseña separada de la URI y errores sin exponer
+  secretos. Se conserva TLS verificado y la configuración del pooler.
+- Rendimiento: memoria compartida con invalidación tras escritura, vigencia
+  de 60 segundos para cambios externos y limpieza al pulsar «Actualizar datos»;
+  gráficas memorizadas y menos comprobaciones de conexión. Las lecturas de
+  seguridad siguen sin memoria. No se reintentan escrituras financieras.
+- Dos cruces de ramas se corrigen: el Excel manual agrupa nombres con las
+  mismas reglas de espacios/mayúsculas de la interfaz; los importes negativos
+  oficiales de Siigo se mantienen visibles en el detalle, pero quedan fuera de
+  los totales confiables y se contabilizan como datos por revisar, igual que
+  en la app. Se preservan las fórmulas de total y saldo manuales.
+- La revisión de seguridad detuvo un commit al detectar que una rama fusionaba
+  y eliminaba registros de clientes automáticamente durante el arranque.
+  Se retira ese disparador: iniciar, consultar y desplegar no ejecutan esa
+  limpieza. Se conserva `unificar_clientes_repetidos(..., confirmar=True)` como
+  mantenimiento explícito, atómico y auditado, pendiente de autorización para
+  datos reales; rechaza identificaciones antiguas distintas. Mientras tanto,
+  los clientes repetidos muestran su registro al elegir dónde aplicar un
+  abono, sin cambiar sus IDs, facturas, pagos ni saldos.
+- `app.py` sigue siendo solo el arranque; se mantienen módulos, esquema,
+  estilos claros, filtros, detalle por cliente, edición, gráficas y separación
+  de las dos carteras. No se conectó a Supabase ni se modificó producción.
+- Se ignora únicamente `/.claude/worktrees/` para no versionar repositorios
+  anidados. Esas copias y su historial se conservan; no se borró ningún archivo.
+- Archivos de ajuste de integración: `.gitignore`, `ARRANQUE.md`,
+  `src/{database,exportacion}.py`, `src/views/manual.py`,
+  `tests/{test_database,test_exportacion,test_clientes_legacy,
+  test_integracion_memoria_seguridad}.py`, además de los cambios incorporados
+  por los merges.
+- Validación conjunta: 368 pruebas correctas con SQLite temporal y dobles de
+  Postgres, incluyendo pantallas, filtros, exportación, abono inicial,
+  preservación de registros antiguos, mantenimiento explícito con rollback,
+  invalidación de memoria y reconexión segura. Pyflakes y revisión de
+  diferencias sin errores. El reinicio de Streamlit Cloud sigue siendo
+  necesario después de publicar código por `fileWatcherType = "none"`.
+
+## 2026-09-29 — Cartera más rápida: memoria de lecturas y menos viajes a Supabase
+
+- Pedido: resolver la lentitud contra Supabase y que la aplicación sea más
+  rápida en general, con pruebas de todo lo que se publica.
+- Medición previa con ~210 facturas contra un Postgres 16 real a ~53 ms por
+  viaje (latencia simulada con un proxy): cada clic en la cartera manual
+  hacía 4 viajes a la base (2 consultas y 2 `SELECT 1` de verificación) y
+  tardaba ~258 ms; Siigo y Conciliación, ~115 ms solo por la actividad de la
+  barra lateral; Seguridad, 10 viajes (~550 ms). El Python de la página
+  tardaba ~22 ms: el resto era espera de red. Armar las gráficas de Plotly
+  era cerca del 30 % de ese Python.
+- Memoria de lecturas en `src/database.py` (`@_memorizar`): `listar_facturas`,
+  `listar_nombres_clientes` y `resumen_actividad` guardan su resultado. Se
+  descarta entera cuando una transacción cambia filas —en Supabase cualquier
+  transacción; en SQLite solo si tocó filas, porque `inicializar` abre una en
+  cada clic—, así que lo guardado desde la aplicación se ve de inmediato en
+  todas las sesiones. Vence a los 60 s por lo que se escriba por fuera (otro
+  proceso, el panel de Supabase); la fecha forma parte de su validez (VENCIDA
+  y días de mora cambian a medianoche); cada llamada recibe copias de las
+  filas, y una lectura que se cruzó con una escritura no se guarda.
+- «Actualizar datos» vacía la memoria (`db.invalidar_lecturas`) antes de
+  releer: sigue trayendo lo último de la base.
+- La conexión compartida ya no se prueba con `SELECT 1` antes de cada uso:
+  solo tras 5 s sin responder, o se renueva de una vez si psycopg ya la sabe
+  cerrada. Si el servidor cortara la conexión en medio de una ráfaga de
+  consultas, esa consulta fallaría una vez y la siguiente reconectaría, igual
+  que antes si el corte caía entre la prueba y la consulta.
+- Las figuras de las gráficas se memorizan por su resumen
+  (`st.cache_resource`): las mismas cifras no se vuelven a armar.
+  `portfolio_figures` sigue entregando figuras nuevas a quien la llame.
+- Resultado con la misma medición: un clic sin cambios en la cartera manual
+  (filtrar, ordenar, cambiar de empresa o de pestaña) pasa de ~258 ms a
+  ~11–20 ms y no va a la base; Siigo y Conciliación, de ~115 ms a ~3–6 ms; el
+  rerun justo después de guardar, de ~264 a ~142 ms; guardar una factura, de
+  ~319 a ~267 ms; Seguridad, de 10 a 6 viajes. En SQLite local, de ~22 a
+  ~12 ms por clic.
+- Sin cambios: el esquema y su creación (el arranque en frío sigue igual;
+  mandar el script en un solo viaje no se puede probar aquí contra el pooler
+  de Supabase), las lecturas de acceso y seguridad (siempre van a la base) y
+  cualquier fórmula, filtro, gráfica o flujo de registro.
+- Archivos: `src/database.py`, `src/views/manual.py` (botón),
+  `src/ui/portfolio_analysis.py`, `tests/test_memoria_lecturas.py` (nuevo) y
+  `ARRANQUE.md`.
+- Impacto contable: ninguno. No cambia ningún cálculo, importe ni dato; solo
+  cuándo se consulta la base.
+- Validación: 26 pruebas nuevas (lecturas repetidas, cada tipo de escritura
+  visible de inmediato, vencimiento, medianoche, copias, bases separadas,
+  escritura simultánea, el botón en la vista real, conexión quieta, cerrada o
+  caída, transacciones en la nube y gráficas). Cada punto crítico se rompió a
+  propósito para confirmar que alguna prueba lo detecta: 8 de 8 detectados.
+  Suite completa: 257 pruebas correctas; pyflakes limpio. Recorrido de punta
+  a punta contra Postgres 16 con latencia: factura por el diálogo, abono,
+  edición, anulación, cambio hecho por fuera más «Actualizar datos» y
+  conexión cortada por el servidor (se reconecta sola), todo correcto.
+
 ## 2026-09-29 — Mitigación del KeyError intermitente al importar la app
 
 - El dueño reportó `KeyError` en `app.py:8`, al importar `src.app_shell`,

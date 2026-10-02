@@ -7,3 +7,5 @@
 .venv/
 __pycache__/
 venv/
+# Checkouts auxiliares: se conserva su historial, no se agregan repositorios anidados.
+/.claude/worktrees/

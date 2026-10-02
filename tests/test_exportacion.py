@@ -2,6 +2,7 @@
 
 from datetime import date
 from io import BytesIO
+import re
 import unittest
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -10,7 +11,7 @@ from streamlit.testing.v1 import AppTest
 
 from src.exportacion import crear_excel
 from src.siigo_muestra import cargar_muestra
-from src.siigo_vista import es_vigente, etiqueta_estado, filas_de_dataframe
+from src.siigo_vista import es_vigente, etiqueta_estado, filas_de_dataframe, filas_sumables, money, suma_auditable
 
 
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -90,6 +91,18 @@ class ExportacionTests(unittest.TestCase):
         self.assertEqual(libro.celda(0, "G14")[1], "1000000")
         self.assertEqual(libro.celda(0, "D14")[1], "277880")
 
+    def test_manual_client_groups_follow_the_same_spaces_and_case_as_the_screen(self):
+        filas = [factura(cliente="Cliente SAS"),
+                 factura(cliente="  CLIENTE   SAS  ", factura="LUA2", empresa_codigo="LUAC"),
+                 factura(cliente="cliente\tSAS", factura="MSU3", empresa_codigo="MSU")]
+        libro = self.exportar(filas)
+        self.assertEqual(len(libro.nombres), 2)
+        for nombre in (libro.nombres[1], libro.celda(0, "A14")[1], libro.celda(1, "A2")[1]):
+            self.assertEqual(nombre, " ".join(nombre.split()))
+        self.assertEqual(libro.columna(1, "B"), ["FEBA1", "LUA2", "MSU3"])
+        self.assertEqual(libro.celda(0, "B14")[1], "3")
+        self.assertEqual(libro.celda(0, "C10")[1], "3000000")
+
     def test_customer_names_collisions_and_literal_formula_text_are_safe(self):
         nombres = ["Resumen", "A/B", "A:B", "x" * 40 + "1", "x" * 40 + "2", "O'BRIEN"]
         libro = self.exportar([factura(cliente=n, descripcion='=HYPERLINK("https://example.test","texto")') for n in nombres])
@@ -123,6 +136,61 @@ class ExportacionTests(unittest.TestCase):
         self.assertEqual(libro.celda(0, "B14")[1], "1")
         self.assertEqual(libro.celda(1, "P9")[1], "USD")
         self.assertEqual(libro.celda(1, "Q10")[1], "Anulada")
+
+    def test_siigo_negative_totals_match_the_screen_without_changing_official_detail(self):
+        base = dict(cliente="Cliente", empresa_codigo="NOVASA", fecha="2026-09-01", moneda="COP",
+                    estado_siigo="DATO_INCOMPLETO")
+        filas = [{**base, "factura": "FV1", "total_siigo": 1200000, "saldo_siigo": 1000000},
+                 {**base, "factura": "FV2", "total_siigo": -10000, "saldo_siigo": -200000},
+                 {**base, "factura": "FV3", "total_siigo": None, "saldo_siigo": None},
+                 {**base, "factura": "FV4", "total_siigo": 2000, "saldo_siigo": 2000, "moneda": "USD"},
+                 {**base, "factura": "FV5", "total_siigo": 900000, "saldo_siigo": 900000,
+                  "estado_siigo": "ANULADA"}]
+        sumables = filas_sumables(filas)
+        saldo, faltantes = suma_auditable(sumables, "saldo_siigo")
+        facturado, _ = suma_auditable(sumables, "total_siigo")
+        libro = self.exportar(filas, "siigo")
+        self.assertEqual(libro.celda(1, "K9"), (None, "-10000"))
+        self.assertEqual(libro.celda(1, "M9"), (None, "-200000"))
+        for referencia in ("C10", "C7", "E14", "F14", "E15", "F15"):
+            self.assertEqual(float(libro.celda(0, referencia)[1]), saldo, referencia)
+        for referencia in ("C14", "C15"):
+            self.assertEqual(float(libro.celda(0, referencia)[1]), facturado, referencia)
+        self.assertEqual(float(libro.celda(1, "M15")[1]), saldo)
+        self.assertEqual(float(libro.celda(1, "K15")[1]), facturado)
+        self.assertEqual(int(libro.celda(0, "I14")[1]), faltantes)
+        self.assertEqual(int(libro.celda(0, "I15")[1]), faltantes)
+        # Excel vuelve a calcular estas fórmulas al abrirse: la misma regla
+        # debe conservarse también después de actualizar las celdas.
+        self.assertIn('M$8:M$12,">=0"', libro.celda(1, "M15")[0])
+        self.assertIn('K$8:K$12,">=0"', libro.celda(1, "K15")[0])
+        self.assertIn('"<0"', libro.celda(0, "I14")[0])
+
+    def test_siigo_only_unknown_or_negative_is_blank_but_known_zero_is_zero(self):
+        for saldos in ((-200000, None), (0, -200000, None)):
+            with self.subTest(saldos=saldos):
+                filas = [dict(cliente="Cliente", empresa_codigo="NOVASA", factura=f"FV{i}",
+                              fecha="2026-09-01", moneda="COP", saldo_siigo=saldo,
+                              total_siigo=1000, estado_siigo="DATO_INCOMPLETO")
+                         for i, saldo in enumerate(saldos, 1)]
+                saldo, faltantes = suma_auditable(filas_sumables(filas), "saldo_siigo")
+                libro = self.exportar(filas, "siigo")
+                esperado = None if faltantes == len(filas) else str(int(saldo))
+                for referencia in ("C10", "C7", "E14", "F14", "E15", "F15"):
+                    self.assertEqual(libro.celda(0, referencia)[1], esperado, referencia)
+                self.assertEqual(int(libro.celda(0, "I14")[1]), faltantes)
+                self.assertEqual(int(libro.celda(0, "I15")[1]), faltantes)
+
+    def test_siigo_without_current_cop_invoices_has_zero_cop_total(self):
+        base = dict(cliente="Cliente", empresa_codigo="NOVASA", fecha="2026-09-01",
+                    total_siigo=2000, saldo_siigo=2000)
+        filas = [{**base, "factura": "FV1", "moneda": "USD"},
+                 {**base, "factura": "FV2", "moneda": "COP", "estado_siigo": "ANULADA"}]
+        self.assertEqual(suma_auditable(filas_sumables(filas), "saldo_siigo"), (0.0, 0))
+        libro = self.exportar(filas, "siigo")
+        self.assertEqual(libro.celda(0, "C10")[1], "0")
+        self.assertEqual(libro.celda(0, "E15")[1], "0")
+        self.assertEqual(libro.celda(0, "I15")[1], "0")
 
     def test_detail_is_complete_and_print_filters_panes_are_present(self):
         detalle = "TRANSPORTE ABC123 MANIFIESTO 123 " * 50
@@ -287,6 +355,11 @@ def vista_siigo():
     from src.views.siigo import _publicar, render_siigo_portfolio
 
     reporte = cargar_muestra()
+    if st.session_state.get("saldos_negativos"):
+        factura = reporte.facturas["factura"].eq("FEBA2050")
+        reporte.facturas.loc[factura, "saldo_siigo"] = -200000
+        reporte.facturas.loc[factura, "total_siigo"] = -10000
+        reporte.facturas.loc[factura, "estado_siigo"] = "DATO_INCOMPLETO"
     if st.session_state.get("lectura_real"):
         reporte.facturas = reporte.facturas[reporte.facturas["empresa_codigo"] == "NOVASA"]
         reporte.parametros = ParametrosLectura(("NOVASA", "LUAC"), dt.date(2026, 9, 1), dt.date(2026, 9, 29))
@@ -303,6 +376,31 @@ def vista_siigo():
 
 
 class ExportacionDesdeLasVistasTests(unittest.TestCase):
+    def test_siigo_excel_matches_screen_negative_totals_and_filtered_unknowns(self):
+        app = AppTest.from_function(vista_siigo, default_timeout=60)
+        app.session_state["saldos_negativos"] = True
+        app.run()
+        self.assertFalse(app.exception)
+        libro = Libro(app.session_state["excel"])
+        tarjetas = {re.search(r'kpi-label">([^<]*)', bloque.value).group(1): bloque.value
+                    for bloque in app.markdown if "kpi-card" in bloque.value}
+        total_fila = 13 + len(libro.nombres)
+        for etiqueta, referencia in (("Saldo pendiente", "C10"), ("Total facturado", f"C{total_fila}")):
+            valor_visible = re.search(r'kpi-value">([^<]*)', tarjetas[etiqueta]).group(1)
+            self.assertEqual(money(float(libro.celda(0, referencia)[1])), valor_visible)
+        faltantes = int(re.search(r'(\d+) sin saldo leído', tarjetas["Saldo pendiente"]).group(1))
+        self.assertEqual(int(libro.celda(0, f"I{total_fila}")[1]), faltantes)
+
+        app.selectbox(key="filtro_saldo_siigo").select("Saldo sin dato").run()
+        app.radio(key="exportar_alcance_siigo").set_value("Solo la vista filtrada").run()
+        self.assertFalse(app.exception)
+        self.assertEqual(set(app.session_state["excel_facturas"]), {"FEBA2050", "FEBA2054", "LUA1740"})
+        libro = Libro(app.session_state["excel"])
+        self.assertIsNone(libro.celda(0, "C10")[1])
+        self.assertEqual(libro.celda(0, f"I{13 + len(libro.nombres)}")[1], "3")
+        detalle = {fila["Factura"]: fila for i in range(1, len(libro.nombres)) for fila in libro.detalle(i)}
+        self.assertEqual(detalle["FEBA2050"]["Saldo pendiente"], "-200000")
+
     def test_manual_full_export_follows_the_screen_order(self):
         app = AppTest.from_function(vista_manual, default_timeout=40).run()
         app.selectbox(key="orden_facturas_manual").select("Saldo: de mayor a menor").run()

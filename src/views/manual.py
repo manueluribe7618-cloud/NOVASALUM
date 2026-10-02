@@ -761,17 +761,44 @@ def _render_customer_detail(
         company_rows = by_company[code]
         company_balance = sum(int(row["saldo_cop"]) for row in company_rows)
         company_title = EMPRESAS[code]["nombre"] if code in EMPRESAS else code
+        customer_ids = sorted({int(row["cliente_id"]) for row in company_rows})
+        registry_balances: dict[int, int] = {}
+        for row in company_rows:
+            customer_id = int(row["cliente_id"])
+            registry_balances[customer_id] = (
+                registry_balances.get(customer_id, 0) + int(row["saldo_cop"])
+            )
         header_column, action_column = st.columns([3.2, 1], vertical_alignment="center")
         with header_column:
             st.markdown(f"**{selected_label} · {company_title}**")
         with action_column:
-            if company_balance > 0 and st.button(
+            if len(customer_ids) > 1:
+                for customer_id in customer_ids:
+                    if registry_balances[customer_id] > 0 and st.button(
+                        f"＋ Abono al registro {customer_id}",
+                        key=f"abono_detalle_{code}_{customer_id}",
+                        help=(
+                            "Saldo pendiente de este registro en la vista actual: "
+                            f"{format_currency(registry_balances[customer_id])}."
+                        ),
+                        use_container_width=True,
+                    ):
+                        _request_payment_for(code, customer_id)
+                        payment_requested = True
+            elif company_balance > 0 and st.button(
                 "＋ Abono aquí",
                 key=f"abono_detalle_{code}",
                 use_container_width=True,
             ):
                 _request_payment_for(code, int(company_rows[0]["cliente_id"]))
                 payment_requested = True
+        if len(customer_ids) > 1:
+            st.caption(
+                f"Esta razón social tiene {len(customer_ids)} registros en {company_title} "
+                f"(registros {', '.join(str(customer_id) for customer_id in customer_ids)}). "
+                "El saldo mostrado reúne sus facturas; cada abono se aplica solo a las "
+                "facturas del registro que elijas."
+            )
         _render_grid(_statement_table(company_rows), key=f"tabla_detalle_cliente_{code}")
         st.markdown(
             f'<div class="statement-company-total">Saldo pendiente '
@@ -1366,7 +1393,7 @@ def render_manual_portfolio(
         st.toast(notice, duration="long")
     refresh_column, export_column, _ = st.columns([1.2, 1.4, 3.4])
     with refresh_column:
-        refreshed = st.button("Actualizar datos", key="actualizar_manual", width="stretch")
+        refreshed = st.button("Actualizar datos", key="actualizar_manual", width="stretch", on_click=db.invalidar_lecturas)
     all_invoices = db.listar_facturas()
     invoices = [row for row in all_invoices if company == TODAS or row["empresa_codigo"] == company]
     if refreshed:
@@ -1490,6 +1517,17 @@ def show_payment_dialog() -> None:
         on_change=lambda: st.session_state.pop(CLAVE_CLIENTE_ABONO, None),
     )
     customers = {int(row["cliente_id"]): row for row in db.clientes_con_saldo(company)}
+    customer_name_counts: dict[str, int] = {}
+    for customer in customers.values():
+        name_key = clave_nombre(customer["cliente"])
+        customer_name_counts[name_key] = customer_name_counts.get(name_key, 0) + 1
+    customer_labels = {
+        customer_id: " ".join(str(customer["cliente"]).split()) + (
+            f" · Registro {customer_id}"
+            if customer_name_counts[clave_nombre(customer["cliente"])] > 1 else ""
+        )
+        for customer_id, customer in customers.items()
+    }
     if preselection and preselection.get("empresa") == company:
         wanted = int(preselection["cliente_id"])
         if wanted in customers:
@@ -1515,9 +1553,7 @@ def show_payment_dialog() -> None:
         "Cliente",
         list(customers),
         index=None,
-        format_func=lambda option: (
-            str(customers[option]["cliente"]) if option in customers else "Cliente sin saldo"
-        ),
+        format_func=lambda option: customer_labels.get(option, "Cliente sin saldo"),
         placeholder="Elige el cliente que hizo el pago",
         key="abono_cliente",
     )
@@ -1529,6 +1565,11 @@ def show_payment_dialog() -> None:
         return
     st.session_state[CLAVE_CLIENTE_ABONO] = customer_id
     customer = customers[customer_id]
+    if customer_name_counts[clave_nombre(customer["cliente"])] > 1:
+        st.caption(
+            f"Esta razón social tiene varios registros en {EMPRESAS[company]['nombre']}. "
+            f"El abono se aplica solo a las facturas del registro {customer_id}."
+        )
     st.caption(
         f"Saldo pendiente: {format_currency(customer['saldo_cop'])} "
         f"en {customer['facturas_pendientes']} factura(s)."

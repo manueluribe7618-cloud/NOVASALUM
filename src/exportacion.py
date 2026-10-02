@@ -18,6 +18,7 @@ import unicodedata
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name
 
+from src.formato import clave_nombre
 from src.siigo_vista import clave_cliente, es_vigente, etiqueta_estado, nombre_cliente
 
 
@@ -53,6 +54,12 @@ def _numero(value: Any) -> int | float | None:
         return value if math.isfinite(value) else None
     except (TypeError, ValueError):
         return None
+
+
+def _importe_sumable(valor: int | float | None, manual: bool) -> bool:
+    """Los negativos de Siigo quedan para revisión, como en suma_auditable."""
+
+    return valor is not None and (manual or valor >= 0)
 
 
 def _fecha(value: Any) -> dt.date | None:
@@ -134,7 +141,7 @@ def crear_excel(filas: list[dict], *, origen: str, fecha_corte: dt.date,
     ultima = len(columnas) - 1
     grupos: dict[str, list[dict]] = defaultdict(list)
     for fila in filas:
-        clave = str(fila.get("cliente") or "Sin cliente").strip().casefold() if manual else clave_cliente(fila)
+        clave = clave_nombre(fila.get("cliente")) if manual else clave_cliente(fila)
         grupos[clave].append(fila)
     salida = BytesIO()
     libro = xlsxwriter.Workbook(salida, {"in_memory": True, "strings_to_formulas": False, "strings_to_urls": False})
@@ -176,6 +183,7 @@ def crear_excel(filas: list[dict], *, origen: str, fecha_corte: dt.date,
             "Las fórmulas se actualizan en Excel; esta descarga no modifica la aplicación." if manual else
             "Totales informados por Siigo, solo COP y facturas vigentes. Los campos vacíos son datos no informados, "
             "incluidos los abonos. Las otras monedas y anuladas permanecen identificadas en el detalle. "
+            "Los importes negativos se conservan en el detalle, pero no suman y cuentan como datos por revisar. "
             "NIT, otros impuestos, ReteIVA, otras retenciones, anticipo y tasa de cambio van al final de cada hoja.")
     resumen.merge_range("A4:I4", nota, formatos["nota"])
     resumen.set_row(3, 32)
@@ -184,6 +192,8 @@ def crear_excel(filas: list[dict], *, origen: str, fecha_corte: dt.date,
     for grupo in sorted(grupos.values(), key=lambda g: _orden_texto(nombre_cliente(g))):
         # XlsxWriter no escapa caracteres de control en el texto del enlace y el archivo quedaría dañado.
         nombre = re.sub(r"[\x00-\x1f]", " ", nombre_cliente(grupo))
+        if manual:
+            nombre = " ".join(nombre.split())
         nombre_hoja = _hoja(nombre, usados)
         hoja = libro.add_worksheet(nombre_hoja)
         hoja.hide_gridlines(2)
@@ -270,11 +280,14 @@ def crear_excel(filas: list[dict], *, origen: str, fecha_corte: dt.date,
             incluidos = [d for d in datos if d["empresa"] == empresa and d["moneda"] == moneda and not d["anulada"]]
             for col, clave in [(10, "total"), (11, "abonos"), (12, "saldo")]:
                 letra = xl_col_to_name(col)
-                cache = sum(d[clave] for d in incluidos if d[clave] is not None)
+                importes = [d[clave] for d in incluidos if _importe_sumable(d[clave], manual)]
+                cache = sum(importes)
                 criterio = f'$A$8:$A${ultimo},A{r+1},$P$8:$P${ultimo},P{r+1},$Q$8:$Q${ultimo},"<>Anulada"'
+                if not manual:
+                    criterio += f',{letra}$8:{letra}${ultimo},">=0"'
                 suma = f'SUMIFS({letra}$8:{letra}${ultimo},{criterio})'
                 # Nunca mostrar cero cuando no se recibió ningún importe.
-                existe = any(d[clave] is not None for d in incluidos)
+                existe = bool(importes)
                 formula = f'=IF(COUNTIFS({criterio},{letra}$8:{letra}${ultimo},"<>" )=0,"",{suma})'
                 hoja.write_formula(r, col, formula, formatos["total"], cache if existe else "")
             if moneda == "COP":
@@ -295,17 +308,23 @@ def crear_excel(filas: list[dict], *, origen: str, fecha_corte: dt.date,
         resumen.write_formula(indice, 1, f"=COUNTIFS({criterio})", formatos["entero"], len(validas))
         for col, letra, clave in [(2, "K", "total"), (3, "L", "abonos"), (4, "M", "saldo")]:
             referencias = ",".join(f"'{escapada}'!{letra}{r}" for r in refs.values())
-            cache = sum(d[clave] for d in validas if d[clave] is not None)
+            importes = [d[clave] for d in validas if _importe_sumable(d[clave], manual)]
+            cache = sum(importes)
             formula = f'=IF(COUNT({referencias})=0,"",SUM({referencias}))' if referencias else '=""'
-            resumen.write_formula(indice, col, formula, formatos["dinero"], cache if any(d[clave] is not None for d in validas) else "")
+            resumen.write_formula(indice, col, formula, formatos["dinero"], cache if importes else "")
         for col, empresa in enumerate(EMPRESAS, 5):
             if empresa in refs:
                 ref = f"'{escapada}'!M{refs[empresa]}"
-                importe = [d["saldo"] for d in validas if d["empresa"] == empresa and d["saldo"] is not None]
+                importe = [d["saldo"] for d in validas if d["empresa"] == empresa and _importe_sumable(d["saldo"], manual)]
                 resumen.write_formula(indice, col, f'=IF({ref}="","",{ref})', formatos["dinero"], sum(importe) if importe else "")
             else:
                 resumen.write_blank(indice, col, None, formatos["dinero"])
-        resumen.write_formula(indice, 8, f'=COUNTIFS({criterio},\'{escapada}\'!$M$8:$M${ultimo},"=")', formatos["entero"], sum(d["saldo"] is None for d in validas))
+        rango_saldo = f"'{escapada}'!$M$8:$M${ultimo}"
+        formula_faltantes = f'=COUNTIFS({criterio},{rango_saldo},"=")'
+        if not manual:
+            formula_faltantes += f'+COUNTIFS({criterio},{rango_saldo},"<0")'
+        resumen.write_formula(indice, 8, formula_faltantes, formatos["entero"],
+                              sum(not _importe_sumable(d["saldo"], manual) for d in validas))
     fin = 13 + len(registros)
     resumen.write(fin, 0, "TOTAL CARTERA COP", formatos["total"])
     for col in range(1, 9):
@@ -321,13 +340,13 @@ def crear_excel(filas: list[dict], *, origen: str, fecha_corte: dt.date,
                 if col == 1:
                     valores.append(1)
                 elif col == 8:
-                    valores.append(int(d["saldo"] is None))
+                    valores.append(int(not _importe_sumable(d["saldo"], manual)))
                 elif col in (2, 3, 4):
                     valores.append(d[{2: "total", 3: "abonos", 4: "saldo"}[col]])
                 else:
                     if d["empresa"] == EMPRESAS[col - 5]:
                         valores.append(d["saldo"])
-        conocidos = [v for v in valores if v is not None]
+        conocidos = [v for v in valores if _importe_sumable(v, manual)]
         formula = f'=IF(COUNT({letra}14:{letra}{fin})=0,"",SUM({letra}14:{letra}{fin}))' if valores else "=0"
         resumen.write_formula(fin, col, formula, formatos["total"], sum(conocidos) if conocidos else (0 if not valores else ""))
     resumen.write_row(5, 0, ["Empresa", "", "Saldo pendiente (COP)"], formatos["cabecera"])
@@ -338,12 +357,13 @@ def crear_excel(filas: list[dict], *, origen: str, fecha_corte: dt.date,
             continue
         letra = xl_col_to_name(5 + EMPRESAS.index(empresa))
         importes = [d["saldo"] for _, _, datos, _, _ in registros for d in datos if d["empresa"] == empresa and d["moneda"] == "COP" and not d["anulada"]]
-        conocidos = [v for v in importes if v is not None]
+        conocidos = [v for v in importes if _importe_sumable(v, manual)]
         valor = sum(conocidos) if conocidos or not importes else ""
         resumen.write_formula(indice, 2, f'=IF({letra}{fin+1}="","",{letra}{fin+1})', formatos["dinero"], valor)
     resumen.write("A10", "TOTAL PENDIENTE", formatos["total"])
-    todos_saldos = [d["saldo"] for _, _, datos, _, _ in registros for d in datos if d["moneda"] == "COP" and not d["anulada"] and d["saldo"] is not None]
-    resumen.write_formula("C10", f"=E{fin+1}", formatos["total"], sum(todos_saldos) if todos_saldos else (0 if not registros else ""))
+    saldos_cop = [d["saldo"] for _, _, datos, _, _ in registros for d in datos if d["moneda"] == "COP" and not d["anulada"]]
+    todos_saldos = [v for v in saldos_cop if _importe_sumable(v, manual)]
+    resumen.write_formula("C10", f"=E{fin+1}", formatos["total"], sum(todos_saldos) if todos_saldos else (0 if not saldos_cop else ""))
     resumen.merge_range("E7:I9", "Selecciona el nombre de un cliente para abrir su hoja. En cada hoja encontrarás el detalle completo y los totales por empresa. Cambia la fecha de corte para recalcular los días en cartera.", formatos["nota"])
     if registros:
         resumen.autofilter(12, 0, fin - 1, 8)

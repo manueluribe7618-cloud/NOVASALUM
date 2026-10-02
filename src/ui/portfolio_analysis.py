@@ -195,6 +195,17 @@ def portfolio_figures(summary: pd.DataFrame) -> tuple[go.Figure, go.Figure]:
     return company_chart, age_chart
 
 
+@st.cache_resource(max_entries=64, show_spinner=False)
+def _cached_portfolio_figures(summary: pd.DataFrame) -> tuple[go.Figure, go.Figure]:
+    """Las mismas cifras dan las mismas gráficas: se arman una sola vez.
+
+    Armar las figuras de Plotly era cerca de un tercio del trabajo de cada
+    clic. Se comparten entre sesiones porque ``st.plotly_chart`` solo las lee.
+    """
+
+    return portfolio_figures(summary)
+
+
 def render_portfolio_charts(rows: list[dict], *, key: str, balance_field="saldo_cop") -> None:
     summary = aging_summary(rows, balance_field=balance_field)
     missing = sum(_number(row.get(balance_field)) is None for row in rows)
@@ -203,7 +214,7 @@ def render_portfolio_charts(rows: list[dict], *, key: str, balance_field="saldo_
     if summary.empty:
         st.info("No hay saldo pendiente para graficar con estos filtros.")
         return
-    figures = portfolio_figures(summary)
+    figures = _cached_portfolio_figures(summary)
     left, right = st.columns([1, 1.5])
     with left, st.container(border=True):
         st.markdown("##### Distribución por empresa")
