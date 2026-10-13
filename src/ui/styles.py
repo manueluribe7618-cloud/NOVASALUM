@@ -363,6 +363,102 @@ def apply_global_styles() -> None:
                 letter-spacing: .02em;
                 white-space: nowrap;
             }
+            /* Pantalla de ingreso: una sola tarjeta centrada. El contenedor
+               lleva key="ingreso_tarjeta" en src/ui/ingreso.py. */
+            .st-key-ingreso_tarjeta {
+                max-width: 430px;
+                margin: 6vh auto 0;
+                padding: 1.7rem 1.6rem 1.1rem;
+                background: #fff;
+                border: 1px solid #d6dee8;
+                border-radius: 16px;
+                box-shadow: 0 12px 32px rgba(15, 23, 42, .07);
+                animation: novasalum-reveal 240ms ease-out;
+            }
+            .st-key-ingreso_tarjeta .brand { font-size: 1.35rem; }
+            .ingreso-lema {
+                margin-top: .4rem;
+                color: var(--muted);
+                font-size: var(--body-font-size);
+            }
+            .ingreso-titulo {
+                margin: 1.5rem 0 0 !important;
+                padding: 0 !important;
+                font-size: 1.35rem !important;
+                font-weight: 800 !important;
+                line-height: 1.2 !important;
+            }
+            .ingreso-ayuda {
+                margin: .25rem 0 .9rem;
+                color: var(--muted);
+                font-size: var(--body-font-size);
+            }
+            /* El borde va en el envoltorio para que el ojo de mostrar u ocultar
+               la contraseña quede dentro del campo, del mismo ancho que el
+               usuario y el botón. */
+            .st-key-ingreso_tarjeta [data-testid="stTextInputRootElement"] {
+                background: #fff;
+                border: 1px solid #cbd5e1;
+                border-radius: 9px;
+                transition: border-color 160ms ease, box-shadow 160ms ease;
+            }
+            .st-key-ingreso_tarjeta [data-testid="stTextInputRootElement"]:focus-within {
+                border-color: var(--blue);
+                box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+            }
+            .st-key-ingreso_tarjeta [data-testid="stTextInput"] input,
+            .st-key-ingreso_tarjeta [data-testid="stTextInput"] input:focus {
+                border: 0 !important;
+                box-shadow: none !important;
+                background: transparent !important;
+            }
+            .st-key-ingreso_tarjeta [data-testid="stTextInputRootElement"] button {
+                color: var(--muted);
+                background: transparent;
+            }
+            /* La pista «Press Enter to submit form» está en inglés; el formulario
+               igual se envía con Enter. */
+            .st-key-ingreso_tarjeta [data-testid="InputInstructions"] {
+                display: none;
+            }
+            .st-key-ingreso_tarjeta [data-testid="stFormSubmitButton"] button {
+                min-height: 2.6rem;
+                color: #fff !important;
+                background: var(--blue) !important;
+                border: 1px solid var(--blue) !important;
+                border-radius: 9px;
+                font-size: var(--body-font-size) !important;
+                font-weight: 700;
+                box-shadow: 0 4px 12px rgba(37, 99, 235, .22);
+                transition: background-color 160ms ease, border-color 160ms ease,
+                            box-shadow 160ms ease, opacity 160ms ease;
+            }
+            .st-key-ingreso_tarjeta [data-testid="stFormSubmitButton"] button:hover:not(:disabled) {
+                background: var(--blue-dark) !important;
+                border-color: var(--blue-dark) !important;
+            }
+            .st-key-ingreso_tarjeta [data-testid="stFormSubmitButton"] button:focus-visible {
+                box-shadow: 0 0 0 3px rgba(37, 99, 235, .28) !important;
+            }
+            .st-key-ingreso_tarjeta [data-testid="stFormSubmitButton"] button:disabled {
+                opacity: .55;
+                box-shadow: none;
+            }
+            /* Mientras el servidor verifica, el botón no recibe otro clic. */
+            .stApp[data-test-script-state="running"] .st-key-ingreso_tarjeta [data-testid="stFormSubmitButton"] button,
+            .stApp[data-test-script-state="rerunRequested"] .st-key-ingreso_tarjeta [data-testid="stFormSubmitButton"] button {
+                pointer-events: none;
+                opacity: .7;
+            }
+            .st-key-ingreso_tarjeta [data-testid="stCaptionContainer"] {
+                text-align: center;
+            }
+            @media (max-width: 760px) {
+                .st-key-ingreso_tarjeta {
+                    margin-top: 1.5vh;
+                    padding: 1.25rem 1rem .9rem;
+                }
+            }
         </style>
         """,
         unsafe_allow_html=True,

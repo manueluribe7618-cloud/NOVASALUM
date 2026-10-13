@@ -62,6 +62,48 @@ autorización de Finanzas o del dueño.
   diferencias sin errores. El reinicio de Streamlit Cloud sigue siendo
   necesario después de publicar código por `fileWatcherType = "none"`.
 
+## 2026-10-13 — Pantalla de ingreso: una tarjeta centrada, sin cambiar el acceso
+
+- Pedido: una pantalla de inicio de sesión profesional e integrada con el
+  resto de NOVASALUM, reutilizando la autenticación, el bloqueo por intentos
+  y la sesión que ya existen.
+- Diseño (`src/ui/ingreso.py`, estilos en `src/ui/styles.py` bajo
+  `st-key-ingreso_tarjeta`): tarjeta blanca centrada de 430 px sobre el fondo
+  claro, borde suave y sombra discreta; marca ◈ NOVASALUM y «Gestión de
+  cartera empresarial»; título «Ingreso»; campos «Usuario» y «Contraseña» con
+  etiqueta visible y el ojo de mostrar u ocultar de Streamlit, ahora dentro
+  del borde del campo; botón «Ingresar» azul, del mismo ancho que los campos.
+  Misma tipografía y tamaño del resto; solo el título es mayor. En celular la
+  tarjeta ocupa el ancho disponible sin desplazamiento horizontal. Sin
+  selectores, registro, redes sociales ni recuperación de contraseña.
+- Funcionamiento: `auth.autenticar` sigue intacto. Antes de verificar se
+  avisa si falta el usuario, la contraseña o ambos, sin registrar intentos.
+  Ante credenciales incorrectas la pantalla muestra siempre «Usuario o
+  contraseña incorrectos.»: `autenticar` agrega cuántos intentos quedan solo
+  cuando la cuenta existe, y ese detalle permitía adivinar qué usuarios son
+  reales, así que se omite en pantalla (el módulo y sus pruebas no cambian).
+  Enter envía el formulario. Un doble clic o dos Enter seguidos con los mismos
+  datos no gastan dos intentos: el segundo envío repite el resultado del
+  primero si llega dentro de 2 s (`VENTANA_INTENTO_REPETIDO`); el dato se
+  recuerda por su HMAC con una llave aleatoria del proceso, nunca la
+  contraseña. Mientras el servidor verifica, el botón no recibe otro clic
+  (CSS sobre `data-test-script-state`). La pista en inglés «Press Enter to
+  submit form» se oculta en la tarjeta.
+- Sin cambios: `app.py`, facturas, abonos, cálculos, datos, permisos ni el
+  bloqueo por intentos.
+- Archivos: `src/ui/ingreso.py`, `src/ui/styles.py`,
+  `tests/test_pantalla_ingreso.py` (nuevo), `tests/test_puerta_acceso.py`
+  (etiqueta «Entrar» → «Ingresar»).
+- Validación: 7 pruebas nuevas sobre la app real (contenido de la tarjeta sin
+  nada de la cartera, campos vacíos sin intentos registrados, mismo mensaje
+  para usuario inexistente y contraseña incorrecta, envío duplicado, bloqueo
+  tras 5 fallos y rechazo de la clave correcta hasta desbloquear, ingreso
+  correcto y cierre de sesión que limpia los campos). Suite completa: 375
+  pruebas correctas; pyflakes limpio. Recorrido en Chrome real (1440×900 y
+  390×844): ojo que muestra y oculta, Enter desde la contraseña, mensajes,
+  campos y botón del mismo ancho, sin desplazamiento horizontal, ingreso,
+  cierre de sesión y vuelta a la tarjeta vacía.
+
 ## 2026-09-29 — Cartera más rápida: memoria de lecturas y menos viajes a Supabase
 
 - Pedido: resolver la lentitud contra Supabase y que la aplicación sea más

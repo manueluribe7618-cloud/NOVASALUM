@@ -115,7 +115,7 @@ class PuertaDeAccesoTests(unittest.TestCase):
         with patch.dict("os.environ", {"NOVASALUM_DB": str(ruta)}):
             prueba = self._app()
             self.assertFalse(prueba.text_input(key="ingreso_usuario").disabled)
-            self.assertEqual([b.label for b in prueba.button], ["Entrar"])
+            self.assertEqual([b.label for b in prueba.button], ["Ingresar"])
             prueba.text_input(key="ingreso_usuario").set_value("martin")
             prueba.text_input(key="ingreso_clave").set_value(CLAVE)
             prueba.button[0].click().run()

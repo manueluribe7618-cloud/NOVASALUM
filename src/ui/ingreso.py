@@ -9,7 +9,11 @@ servidor termina la sesión.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import hmac
 import html
+import secrets
+import time
 from typing import Any
 
 import pandas as pd
@@ -20,6 +24,36 @@ from src import autenticacion as auth
 
 CLAVE_SESION = "usuario_sesion"
 CLAVE_REVISION = "acceso_revision"
+
+# Un doble clic o dos Enter seguidos en «Ingresar» llegan como dos
+# reejecuciones con el mismo formulario. La segunda no vuelve a verificar: si
+# llega dentro de esta ventana con los mismos datos, repite el resultado de la
+# primera. Sin esto, un doble clic con la contraseña equivocada contaba dos
+# intentos fallidos.
+CLAVE_ULTIMO_INTENTO = "ingreso_ultimo_intento"
+VENTANA_INTENTO_REPETIDO = 2.0
+MENSAJE_CREDENCIALES = "Usuario o contraseña incorrectos."
+# Los datos del intento se recuerdan por su HMAC con una llave aleatoria de
+# este proceso: la contraseña nunca queda en la sesión, ni cifrada.
+_SELLO_INTENTOS = secrets.token_bytes(32)
+
+
+def _huella_intento(usuario: str, clave: str) -> str:
+    return hmac.new(
+        _SELLO_INTENTOS, (usuario + "\0" + clave).encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def _intento_repetido(huella: str) -> str | None:
+    """Mensaje del intento idéntico que acaba de fallar, si lo hubo."""
+
+    anterior = st.session_state.get(CLAVE_ULTIMO_INTENTO)
+    if not isinstance(anterior, tuple) or len(anterior) != 3:
+        return None
+    huella_anterior, terminado_en, mensaje = anterior
+    if huella_anterior == huella and time.monotonic() - terminado_en < VENTANA_INTENTO_REPETIDO:
+        return str(mensaje)
+    return None
 
 
 def _leer_credencial() -> auth.CredencialConfigurada:
@@ -73,16 +107,57 @@ def _fecha_visible(valor: Any) -> str:
         return str(valor)
 
 
-def render_ingreso() -> None:
-    """Pantalla de ingreso. No muestra nada de la cartera hasta autenticar."""
+def _mensaje_campos_vacios(usuario: str, clave: str) -> str | None:
+    if not usuario.strip() and not clave:
+        return "Escribe tu usuario y tu contraseña."
+    if not usuario.strip():
+        return "Escribe tu usuario."
+    if not clave:
+        return "Escribe tu contraseña."
+    return None
 
-    st.markdown(
-        '<div class="eyebrow">NOVASALUM</div>'
-        '<h1 style="margin:0">Ingreso</h1>'
-        '<div class="page-subtitle">Cartera y recaudo · acceso restringido</div>',
-        unsafe_allow_html=True,
-    )
-    st.write("")
+
+def _verificar_ingreso(
+    usuario: str, clave: str, credencial: auth.CredencialConfigurada
+) -> str | None:
+    """Intenta ingresar. Devuelve el mensaje de error, o ``None`` si entró."""
+
+    huella = _huella_intento(usuario, clave)
+    repetido = _intento_repetido(huella)
+    if repetido is not None:
+        return repetido
+    try:
+        identidad = auth.autenticar(usuario, clave, credencial=credencial)
+    except auth.ErrorAcceso as exc:
+        mensaje = str(exc)
+        # ``autenticar`` agrega cuántos intentos quedan, pero solo cuando la
+        # cuenta existe: en pantalla se muestra lo mismo exista o no, para que
+        # nadie pueda averiguar qué usuarios son reales.
+        if mensaje.startswith(MENSAJE_CREDENCIALES):
+            mensaje = MENSAJE_CREDENCIALES
+    except Exception as exc:
+        mensaje = (
+            "No fue posible verificar el ingreso "
+            f"({type(exc).__name__}). Revisa la conexión con la base de datos."
+        )
+    else:
+        st.session_state[CLAVE_SESION] = identidad
+        st.session_state[CLAVE_REVISION] = credencial.revision
+        st.session_state.pop(CLAVE_ULTIMO_INTENTO, None)
+        return None
+    st.session_state[CLAVE_ULTIMO_INTENTO] = (huella, time.monotonic(), mensaje)
+    return mensaje
+
+
+def render_ingreso() -> None:
+    """Pantalla de ingreso. No muestra nada de la cartera hasta autenticar.
+
+    Una sola tarjeta centrada con el nombre, los dos campos y el botón. La
+    autenticación, el bloqueo por intentos y la sesión son los de
+    ``src.autenticacion``; aquí solo se dibuja. El campo de contraseña trae el
+    ojo de mostrar/ocultar de Streamlit y Enter envía el formulario. Los
+    estilos de la tarjeta viven en ``src.ui.styles`` bajo ``st-key-ingreso_tarjeta``.
+    """
 
     # Descarta enlaces y borradores de la activación anterior.
     if "activar" in st.query_params:
@@ -94,33 +169,39 @@ def render_ingreso() -> None:
         credencial = _leer_credencial()
     except auth.ErrorAcceso as exc:
         credencial = None
-        st.info(str(exc))
+        aviso_configuracion = str(exc)
     pendiente = credencial is None
 
-    columna, _ = st.columns([1.2, 1])
-    with columna:
-        with st.form("ingreso_novasalum"):
-            usuario = st.text_input("Usuario", key="ingreso_usuario", disabled=pendiente)
-            clave = st.text_input("Contraseña", type="password", key="ingreso_clave", disabled=pendiente)
+    with st.container(key="ingreso_tarjeta"):
+        st.markdown(
+            '<div class="brand"><span class="brand-mark">◈</span>NOVASALUM</div>'
+            '<div class="ingreso-lema">Gestión de cartera empresarial</div>'
+            '<h2 class="ingreso-titulo">Ingreso</h2>'
+            '<div class="ingreso-ayuda">Acceso restringido. Ingresa con tu usuario y contraseña.</div>',
+            unsafe_allow_html=True,
+        )
+        if pendiente:
+            st.info(aviso_configuracion)
+        with st.form("ingreso_novasalum", border=False, enter_to_submit=True):
+            usuario = st.text_input(
+                "Usuario", key="ingreso_usuario", autocomplete="username", disabled=pendiente,
+            )
+            clave = st.text_input(
+                "Contraseña", type="password", key="ingreso_clave",
+                autocomplete="current-password", disabled=pendiente,
+            )
             entrar = st.form_submit_button(
-                "Entrar", type="primary", use_container_width=True, disabled=pendiente
+                "Ingresar", type="primary", width="stretch", disabled=pendiente
             )
         if entrar and not pendiente:
-            try:
-                identidad = auth.autenticar(usuario, clave, credencial=credencial)
-            except auth.ErrorAcceso as exc:
-                st.error(str(exc))
-            except Exception as exc:
-                st.error(
-                    "No fue posible verificar el ingreso "
-                    f"({type(exc).__name__}). Revisa la conexión con la base de datos."
-                )
-            else:
-                st.session_state[CLAVE_SESION] = identidad
-                st.session_state[CLAVE_REVISION] = credencial.revision
+            error = _mensaje_campos_vacios(usuario, clave)
+            if error is None:
+                error = _verificar_ingreso(usuario, clave, credencial)
+            if error is None:
                 # La contraseña no debe quedar en memoria de sesión.
                 st.session_state.pop("ingreso_clave", None)
                 st.rerun()
+            st.error(error)
         st.caption(
             f"Tras {auth.MAX_INTENTOS} intentos fallidos la cuenta se bloquea "
             f"durante {auth.MINUTOS_BLOQUEO} minutos."
