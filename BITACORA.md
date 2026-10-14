@@ -7,7 +7,6 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
-
 ## 2026-10-14 — Gráficas de cartera con ECharts y sombra
 
 - Pedido del dueño: usar en NOVASALUM las gráficas ECharts con sombra del
@@ -26,6 +25,7 @@ autorización de Finanzas o del dueño.
 - Validación: 377 pruebas, pyflakes limpio; revisado en navegador con datos
   de demostración en base temporal (escritorio y ancho angosto, manual y
   Siigo). Al publicar, Streamlit Cloud reinstala dependencias y reinicia.
+
 ## 2026-10-01 — Integración de las mejoras pendientes sin perder el historial
 
 - Pedido del dueño: realizar el merge pertinente, conservar las mejoras y
