@@ -7,6 +7,19 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-10-14 — La tabla de clientes llena siempre todo el ancho
+
+- Pedido del dueño: en «Clientes y saldo pendiente» media tabla quedaba vacía
+  al ocultar la barra lateral.
+- Causa: la columna Cliente (flex) solo repartía el ancho al cargar; al
+  ensancharse la tabla, las columnas se quedaban con el ancho anterior.
+- `src/ui/grid.py`: nueva opción `fill_width` que reajusta las columnas al
+  ancho visible al cargar y cada vez que la tabla cambia de tamaño. Se usa en
+  las tablas de clientes de la cartera manual y del espejo Siigo. Las columnas
+  de cifras siguen con ancho fijo; Cliente toma el espacio restante.
+- Validación: 378 pruebas, pyflakes limpio; medido en navegador a 1440 px:
+  con barra lateral 978/978 px y sin ella 1277/1277 px, en ambas tablas.
+
 ## 2026-10-14 — Gráficas de cartera con ECharts y sombra
 
 - Pedido del dueño: usar en NOVASALUM las gráficas ECharts con sombra del

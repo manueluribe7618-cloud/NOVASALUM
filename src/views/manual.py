@@ -283,6 +283,7 @@ def _render_grid(
     open_customer_on_click: bool = False,
     column_config: dict[str, dict[str, Any]] | None = None,
     max_height: int | None = None,
+    fill_width: bool = False,
 ) -> dict[str, Any] | None:
     """Muestra la tabla compartida; el doble clic para editar es solo manual."""
 
@@ -295,6 +296,7 @@ def _render_grid(
         on_cell_click=REQUEST_CUSTOMER_DETAIL if open_customer_on_click else None,
         click_event_name="customerDetailRequested" if open_customer_on_click else None,
         column_config=column_config,
+        fill_width=fill_width,
     )
 
 
@@ -633,6 +635,7 @@ def _render_customer_debt(company: str, invoices: list[dict[str, Any]]) -> str |
         open_customer_on_click=True,
         column_config=COLUMNAS_CLIENTES,
         max_height=520,
+        fill_width=True,
     )
     st.caption("Clic sobre un cliente para abrir su detalle, aquí abajo.")
     return _consume_customer_click_event(event)

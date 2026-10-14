@@ -686,7 +686,8 @@ def render_siigo_portfolio(company: str) -> None:
         else:
             orden_clientes = st.selectbox("Ordenar clientes por", CUSTOMER_SORT_OPTIONS, key="orden_clientes_siigo")
             tabla = sort_customer_table(tabla, orden_clientes)
-            render_grid(tabla[list(COLUMNAS_CLIENTES)], key=f"tabla_clientes_siigo_{orden_clientes}", max_height=520)
+            render_grid(tabla[list(COLUMNAS_CLIENTES)], key=f"tabla_clientes_siigo_{orden_clientes}", max_height=520,
+                        fill_width=True)
         st.write("")
         _render_estado_cuenta(visibles)
 

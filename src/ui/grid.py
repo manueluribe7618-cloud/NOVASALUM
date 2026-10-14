@@ -116,6 +116,10 @@ function(a, b) {
 """)
 
 
+# Flex solo reparte el ancho al cargar; sin esto, al ensancharse la tabla queda espacio vacío.
+SIZE_COLUMNS_TO_FIT = JsCode("function(params) { params.api.sizeColumnsToFit(); }")
+
+
 def render_grid(
     table: pd.DataFrame,
     *,
@@ -126,6 +130,7 @@ def render_grid(
     on_cell_click: JsCode | None = None,
     click_event_name: str | None = None,
     column_config: dict[str, dict[str, Any]] | None = None,
+    fill_width: bool = False,
 ) -> dict[str, Any] | None:
     """Muestra una tabla de librería con cabecera azul y menú tipo Excel.
 
@@ -136,6 +141,8 @@ def render_grid(
     ``click_event_name``; lo usa la tabla de clientes para abrir el detalle.
     ``column_config`` ajusta columnas puntuales (anchos fijos, por ejemplo)
     sin que este módulo conozca ninguna regla de negocio.
+    ``fill_width`` reajusta las columnas a todo el ancho cada vez que la tabla
+    cambia de tamaño (por ejemplo, al ocultar la barra lateral).
     """
 
     builder = GridOptionsBuilder.from_dataframe(table)
@@ -181,6 +188,8 @@ def render_grid(
         suppressCellFocus=not (edit_on_double_click or on_cell_click is not None),
         suppressMovableColumns=True,
     )
+    if fill_width:
+        builder.configure_grid_options(onFirstDataRendered=SIZE_COLUMNS_TO_FIT, onGridSizeChanged=SIZE_COLUMNS_TO_FIT)
     if edit_on_double_click and on_row_event is not None:
         builder.configure_grid_options(
             getRowId=JsCode("function(params) { return String(params.data._factura_id); }"),

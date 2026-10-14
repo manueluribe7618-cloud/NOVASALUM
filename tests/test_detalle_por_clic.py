@@ -81,6 +81,20 @@ class AnchosFijosDeLaTablaDeClientes(unittest.TestCase):
         self.assertEqual(manual.COLUMNAS_CLIENTES["Cliente"].get("flex"), 1)
         self.assertNotIn("maxWidth", manual.COLUMNAS_CLIENTES["Cliente"])
 
+    def test_la_tabla_se_reajusta_al_ancho_cuando_cambia_de_tamano(self) -> None:
+        import pandas as pd
+        from src.ui import grid
+
+        def opciones(**extra):
+            with patch.object(grid, "AgGrid") as aggrid:
+                grid.render_grid(pd.DataFrame({"Cliente": ["ACME"]}), key="t", **extra)
+            return aggrid.call_args.kwargs["gridOptions"]
+
+        ajustada = opciones(fill_width=True)
+        self.assertIs(ajustada["onGridSizeChanged"], grid.SIZE_COLUMNS_TO_FIT)
+        self.assertIs(ajustada["onFirstDataRendered"], grid.SIZE_COLUMNS_TO_FIT)
+        self.assertNotIn("onGridSizeChanged", opciones())
+
 
 class ElClicAbreElDetalle(unittest.TestCase):
     def setUp(self) -> None:
