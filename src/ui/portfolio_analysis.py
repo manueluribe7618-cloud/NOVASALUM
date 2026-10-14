@@ -13,6 +13,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+try:
+    from streamlit_echarts import st_echarts
+except ImportError:  # Plotly queda de respaldo si el componente no está instalado.
+    st_echarts = None
+
 from src.formato import hoy_colombia, parse_cop
 from src.ui.components import EMPRESAS, format_currency
 
@@ -176,7 +181,7 @@ def portfolio_figures(summary: pd.DataFrame) -> tuple[go.Figure, go.Figure]:
         breakdown.append("<br>".join(f"{row.Empresa}: {format_currency(row.Saldo)}" for row in parts.itertuples()))
     age_chart = go.Figure(go.Bar(
         x=labels, y=group["Saldo"].tolist(), width=0.54,
-        marker=dict(color=["#c7d2fe", "#a5b4fc", "#818cf8", "#6366f1", "#4f46e5", "#3730a3", "#94a3b8"][:len(labels)], cornerradius=7),
+        marker=dict(color=list(AGE_COLORS[:len(labels)]), cornerradius=7),
         text=[compact_money(v) if v else "" for v in group["Saldo"]], textposition="outside", cliponaxis=False,
         textfont=dict(size=12, color="#334155"),
         customdata=[[format_currency(row.Saldo), int(row.Facturas), detail]
@@ -206,6 +211,121 @@ def _cached_portfolio_figures(summary: pd.DataFrame) -> tuple[go.Figure, go.Figu
     return portfolio_figures(summary)
 
 
+AGE_SHORT = dict(zip(AGE_RANGES, ("0–30", "31–60", "61–90", "91–180", "181–365", "+365")))
+AGE_COLORS = ("#c7d2fe", "#a5b4fc", "#818cf8", "#6366f1", "#4f46e5", "#3730a3", "#94a3b8")
+_SHADOW = {"shadowBlur": 10, "shadowColor": "rgba(16,24,40,0.12)", "shadowOffsetY": 3}
+_TOOLTIP = {
+    "trigger": "item", "backgroundColor": "rgba(255,255,255,0.97)", "borderColor": "#E4E7EC",
+    "borderWidth": 1, "padding": [10, 12], "textStyle": {"color": "#1D2939"},
+    "extraCssText": "border-radius:12px;box-shadow:0 12px 30px rgba(16,24,40,.14);",
+}
+_TOOLBOX = {
+    "show": True, "right": 6, "top": 0,
+    "feature": {"saveAsImage": {"title": "Descargar imagen", "pixelRatio": 2, "backgroundColor": "#ffffff"}},
+    "iconStyle": {"borderColor": "#667085"},
+}
+
+
+def _percent(part: float, total: float) -> str:
+    return f"{part / total:.1%}".replace(".", ",") if total else "0,0%"
+
+
+def company_chart_options(summary: pd.DataFrame) -> dict:
+    """Dona por empresa con sombra; las mismas cifras de ``aging_summary``."""
+
+    companies = summary.groupby("Empresa", sort=False)[["Saldo", "Facturas"]].sum().sort_values("Saldo", ascending=False)
+    total = float(companies["Saldo"].sum())
+    data = []
+    for code, row in companies.iterrows():
+        amount = float(row["Saldo"])
+        name = html.escape(str(code))
+        data.append({
+            "name": str(code), "value": amount,
+            "itemStyle": {"color": EMPRESAS.get(code, {}).get("color", "#64748b")},
+            "tooltip": {"formatter": (
+                f'<div style="font-weight:700;margin-bottom:4px">{name}</div>'
+                f'<div style="font-size:16px;font-weight:700">{format_currency(amount)}</div>'
+                f'<div style="color:#667085;margin-top:2px">{_percent(amount, total)} del saldo · '
+                f'{int(row["Facturas"])} facturas</div>'
+            )},
+        })
+    return {
+        "backgroundColor": "transparent", "animationDuration": 800, "animationEasing": "cubicOut",
+        "aria": {"enabled": True, "decal": {"show": False}},
+        "title": {
+            "text": compact_money(total), "subtext": "SALDO PENDIENTE", "left": "center", "top": "40%",
+            "textStyle": {"color": "#0F172A", "fontSize": 17, "fontWeight": 700},
+            "subtextStyle": {"color": "#64748B", "fontSize": 10, "fontWeight": 650, "lineHeight": 22},
+        },
+        "toolbox": _TOOLBOX, "tooltip": _TOOLTIP,
+        "series": [{
+            "name": "Saldo por empresa", "type": "pie", "data": data,
+            "radius": ["66%", "86%"], "center": ["50%", "52%"], "label": {"show": False},
+            "itemStyle": {"borderColor": "#FFFFFF", "borderWidth": 4, "borderRadius": 8, **_SHADOW},
+            "emphasis": {"scale": True, "scaleSize": 7,
+                         "itemStyle": {"shadowBlur": 18, "shadowColor": "rgba(16,24,40,0.18)"}},
+        }],
+    }
+
+
+def age_chart_options(summary: pd.DataFrame) -> dict:
+    """Barras por días en cartera con sombra y el desglose por empresa al pasar el mouse."""
+
+    labels = [*AGE_RANGES, *([NO_DATE] if NO_DATE in set(summary["Rango"]) else [])]
+    group = summary.groupby("Rango")[["Saldo", "Facturas"]].sum().reindex(labels, fill_value=0)
+    data = []
+    for color, label in zip(AGE_COLORS, labels):
+        amount = float(group.loc[label, "Saldo"])
+        parts = summary[summary["Rango"] == label]
+        detail = "".join(
+            f'<div><span style="color:#667085">{html.escape(str(part.Empresa))}:</span> '
+            f'<b>{format_currency(part.Saldo)}</b></div>' for part in parts.itertuples()
+        )
+        data.append({
+            "value": amount,
+            "itemStyle": {"color": color, "borderRadius": [9, 9, 0, 0], **_SHADOW},
+            "label": {"show": bool(amount), "position": "top", "formatter": compact_money(amount),
+                      "color": "#334155", "fontSize": 12, "fontWeight": 600},
+            "tooltip": {"formatter": (
+                f'<div style="font-weight:700;margin-bottom:4px">{html.escape(label)}</div>'
+                f'<div style="font-size:16px;font-weight:700">{format_currency(amount)}</div>'
+                f'<div style="color:#667085;margin:2px 0 6px">{int(group.loc[label, "Facturas"])} facturas</div>'
+                f'{detail}'
+            )},
+        })
+    return {
+        "backgroundColor": "transparent", "animationDuration": 720, "animationEasing": "cubicOut",
+        "aria": {"enabled": True, "decal": {"show": False}},
+        "grid": {"left": 8, "right": 8, "top": 40, "bottom": 8, "containLabel": True},
+        "toolbox": _TOOLBOX, "tooltip": _TOOLTIP,
+        "xAxis": {
+            "type": "category", "data": [AGE_SHORT.get(label, label) for label in labels],
+            "name": "días", "nameLocation": "end", "nameTextStyle": {"color": "#98A2B3", "fontSize": 10},
+            "axisLine": {"show": False}, "axisTick": {"show": False},
+            "axisLabel": {"color": "#475467", "fontSize": 11, "interval": 0, "lineHeight": 14},
+        },
+        "yAxis": {
+            "type": "value", "axisLabel": {"show": False},
+            "splitLine": {"lineStyle": {"color": "rgba(16,24,40,0.07)", "type": "dashed"}},
+        },
+        "series": [{
+            "name": "Saldo por días en cartera", "type": "bar", "data": data, "barMaxWidth": 46,
+            "showBackground": True, "backgroundStyle": {"color": "rgba(16,24,40,0.035)", "borderRadius": 9},
+            "emphasis": {"itemStyle": {"shadowBlur": 16, "shadowColor": "rgba(16,24,40,0.20)"}},
+        }],
+    }
+
+
+def _show_echart(options: dict, *, key: str) -> bool:
+    if st_echarts is None:
+        return False
+    try:
+        st_echarts(options=options, height="310px", renderer="svg", key=key)
+    except Exception:
+        return False
+    return True
+
+
 def render_portfolio_charts(rows: list[dict], *, key: str, balance_field="saldo_cop") -> None:
     summary = aging_summary(rows, balance_field=balance_field)
     missing = sum(_number(row.get(balance_field)) is None for row in rows)
@@ -214,24 +334,26 @@ def render_portfolio_charts(rows: list[dict], *, key: str, balance_field="saldo_
     if summary.empty:
         st.info("No hay saldo pendiente para graficar con estos filtros.")
         return
-    figures = _cached_portfolio_figures(summary)
     left, right = st.columns([1, 1.5])
     with left, st.container(border=True):
         st.markdown("##### Distribución por empresa")
         st.caption("Participación en el saldo pendiente")
-        st.plotly_chart(figures[0], width="stretch", theme=None, key=f"{key}_empresas",
-                        config={"displayModeBar": False, "scrollZoom": False})
+        if not _show_echart(company_chart_options(summary), key=f"{key}_empresas"):
+            st.plotly_chart(_cached_portfolio_figures(summary)[0], width="stretch", theme=None,
+                            key=f"{key}_empresas", config={"displayModeBar": False, "scrollZoom": False})
         amounts = summary.groupby("Empresa")["Saldo"].sum().sort_values(ascending=False)
         for code, amount in amounts.items():
             color = EMPRESAS.get(code, {}).get("color", "#64748b")
             st.markdown(f'<div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;margin:4px 0">'
-                        f'<span style="border-left:4px solid {color};padding-left:9px">{html.escape(code)}</span>'
+                        f'<span style="border-left:4px solid {color};padding-left:9px">{html.escape(code)}'
+                        f' <span style="color:#94a3b8">{_percent(amount, amounts.sum())}</span></span>'
                         f'<strong>{format_currency(amount)}</strong></div>', unsafe_allow_html=True)
     with right, st.container(border=True):
         st.markdown("##### Días en cartera")
         st.caption("Saldo por tiempo transcurrido desde la emisión")
-        st.plotly_chart(figures[1], width="stretch", theme=None, key=f"{key}_dias",
-                        config={"displayModeBar": False, "scrollZoom": False})
+        if not _show_echart(age_chart_options(summary), key=f"{key}_dias"):
+            st.plotly_chart(_cached_portfolio_figures(summary)[1], width="stretch", theme=None,
+                            key=f"{key}_dias", config={"displayModeBar": False, "scrollZoom": False})
         by_age = summary.groupby("Rango")["Saldo"].sum()
         largest = by_age.idxmax()
         percent = f"{by_age[largest] / by_age.sum():.1%}".replace(".", ",")

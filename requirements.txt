@@ -1,6 +1,10 @@
 streamlit>=1.58,<2
 pandas
 plotly==6.3.1
+# 0.7 usa Components v2 y falla al registrarse; 0.4 conserva el componente v1 estable.
+streamlit-echarts==0.4.0
+pyecharts==2.1.0
+simplejson==4.2.0
 XlsxWriter==3.2.9
 certifi
 streamlit-aggrid==1.0.5

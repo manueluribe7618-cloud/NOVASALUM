@@ -7,6 +7,25 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+
+## 2026-10-14 — Gráficas de cartera con ECharts y sombra
+
+- Pedido del dueño: usar en NOVASALUM las gráficas ECharts con sombra del
+  proyecto Optimizar-Novasa.
+- `src/ui/portfolio_analysis.py`: «Distribución por empresa» (dona) y «Días en
+  cartera» (barras) se dibujan con `streamlit-echarts`, con sombra, esquinas
+  redondeadas, franja de fondo, detalle con sombra al pasar el mouse y botón
+  para descargar la imagen. Sirven a la cartera manual y al espejo Siigo.
+- Las cifras salen del mismo `aging_summary`; no cambia ningún cálculo. El
+  centro de la dona usa el formato compacto (M = millones) para caber en
+  pantallas angostas; el valor exacto sigue en la lista, la tarjeta y el
+  detalle. Los porcentajes por empresa pasan a la lista bajo la dona.
+- Plotly queda de respaldo si el componente no carga.
+- `requirements.txt`: `streamlit-echarts==0.4.0`, `pyecharts==2.1.0`,
+  `simplejson==4.2.0` (la 0.7 usa Components v2 y falla al registrarse).
+- Validación: 377 pruebas, pyflakes limpio; revisado en navegador con datos
+  de demostración en base temporal (escritorio y ancho angosto, manual y
+  Siigo). Al publicar, Streamlit Cloud reinstala dependencias y reinicia.
 ## 2026-10-01 — Integración de las mejoras pendientes sin perder el historial
 
 - Pedido del dueño: realizar el merge pertinente, conservar las mejoras y

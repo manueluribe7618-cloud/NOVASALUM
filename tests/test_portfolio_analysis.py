@@ -100,6 +100,37 @@ class AgingTests(unittest.TestCase):
         company.to_json()
         ages.to_json()
 
+    def test_echarts_keep_the_same_totals_with_shadow_and_plain_json(self):
+        import json
+        from src.ui.portfolio_analysis import age_chart_options, company_chart_options
+
+        rows = [invoice(1, days=31, balance=1200), invoice(2, days=60, balance=300, empresa_codigo="LUAC"),
+                invoice(3, days=400, balance=500, empresa_codigo="MSU")]
+        summary = aging_summary(rows, today=TODAY)
+        company, ages = company_chart_options(summary), age_chart_options(summary)
+        json.dumps(company, allow_nan=False)
+        json.dumps(ages, allow_nan=False)
+        pie, bars = company["series"][0], ages["series"][0]
+        self.assertEqual(sum(item["value"] for item in pie["data"]), 2000)
+        self.assertEqual([item["name"] for item in pie["data"]], ["NOVASA", "MSU", "LUAC"])
+        self.assertEqual(company["title"]["text"], "$ 2.000")
+        self.assertEqual([item["value"] for item in bars["data"]], [0, 1500, 0, 0, 0, 500])
+        self.assertEqual([item["label"]["show"] for item in bars["data"]], [False, True, False, False, False, True])
+        self.assertIn("LUAC:</span> <b>$ 300</b>", bars["data"][1]["tooltip"]["formatter"])
+        self.assertEqual(len(ages["xAxis"]["data"]), len(AGE_RANGES))
+        self.assertGreater(pie["itemStyle"]["shadowBlur"], 0)
+        self.assertTrue(all(item["itemStyle"]["shadowBlur"] > 0 for item in bars["data"]))
+
+    def test_charts_fall_back_to_plotly_when_echarts_fails(self):
+        from unittest.mock import patch
+        from src.ui import portfolio_analysis as pa
+
+        summary = aging_summary([invoice(1, days=31, balance=1200)], today=TODAY)
+        with patch.object(pa, "st_echarts", side_effect=RuntimeError("sin componente")):
+            self.assertFalse(pa._show_echart(pa.age_chart_options(summary), key="x"))
+        with patch.object(pa, "st_echarts", None):
+            self.assertFalse(pa._show_echart(pa.age_chart_options(summary), key="x"))
+
 
 def manual_app():
     import datetime as dt
@@ -139,6 +170,12 @@ def manual_app():
         manual.render_manual_portfolio(company)
 
 
+def echarts(app):
+    import json
+    return [json.loads(c.proto.json_args)["options"] for c in app.get("component_instance")
+            if c.proto.component_name == "streamlit_echarts.st_echarts"]
+
+
 class PortfolioUiTests(unittest.TestCase):
     def test_customer_detail_matches_age_filter_summary_and_export(self):
         today = date.today()
@@ -167,7 +204,7 @@ class PortfolioUiTests(unittest.TestCase):
     def test_dropdown_sort_and_combined_filters_update_table_kpis_and_charts(self):
         app = AppTest.from_function(manual_app, default_timeout=40).run()
         self.assertFalse(app.exception)
-        self.assertEqual(len(app.get("plotly_chart")), 2)
+        self.assertEqual(len(echarts(app)), 2)
         app.selectbox(key="orden_facturas_manual").select("Saldo: de menor a mayor").run()
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["visible_ids"], [2, 3, 1])
@@ -177,15 +214,17 @@ class PortfolioUiTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["visible_ids"], [2])
         self.assertIn("$ 900", " ".join(block.value for block in app.markdown))
-        self.assertEqual(len(app.get("plotly_chart")), 2)
+        company, ages = echarts(app)
+        self.assertEqual(company["title"]["text"], "$ 900")
+        self.assertEqual(sum(item["value"] for item in ages["series"][0]["data"]), 900)
         app.text_input(key="filtro_facturas_manual").set_value("sin coincidencia").run()
         self.assertFalse(app.exception)
-        self.assertEqual(len(app.get("plotly_chart")), 0)
+        self.assertEqual(len(echarts(app)), 0)
         self.assertIn("$ 0", " ".join(block.value for block in app.markdown))
         next(button for button in app.button if button.label == "Limpiar filtros").click().run()
         self.assertFalse(app.exception)
         self.assertEqual(app.multiselect(key="filtro_dias_manual").value, [])
-        self.assertEqual(len(app.get("plotly_chart")), 2)
+        self.assertEqual(len(echarts(app)), 2)
 
     def test_full_export_ignores_view_filters_and_filtered_export_respects_them(self):
         app = AppTest.from_function(manual_app, default_timeout=40).run()
