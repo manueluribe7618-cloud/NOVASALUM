@@ -467,6 +467,13 @@ def inicializar(ruta: str | Path | None = None) -> None:
             conexion, "facturas_manual", "descuento_cop",
             "INTEGER NOT NULL DEFAULT 0", postgres=en_postgres,
         )
+        _asegurar_columna(
+            conexion, "abonos_manual", "reversado_en", "TEXT", postgres=en_postgres,
+        )
+        _asegurar_columna(
+            conexion, "abonos_manual", "motivo_reverso",
+            "TEXT NOT NULL DEFAULT ''", postgres=en_postgres,
+        )
         for codigo, datos in EMPRESAS.items():
             conexion.execute(
                 """
@@ -599,7 +606,9 @@ _ESQUEMA_BASE = """
                 referencia TEXT NOT NULL DEFAULT '',
                 monto_cop INTEGER NOT NULL CHECK (monto_cop > 0),
                 saldo_a_favor_cop INTEGER NOT NULL DEFAULT 0 CHECK (saldo_a_favor_cop >= 0),
-                creado_en TEXT NOT NULL
+                creado_en TEXT NOT NULL,
+                reversado_en TEXT,
+                motivo_reverso TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS aplicaciones_abono (
@@ -1149,6 +1158,38 @@ def anular_factura(
         )
 
 
+def reactivar_factura(
+    factura_id: int,
+    motivo: Any,
+    ruta: str | Path | None = None,
+) -> None:
+    """Devuelve a la cartera una factura anulada por error, con su mismo número."""
+
+    inicializar(ruta)
+    razon = _texto(motivo, "El motivo de la reactivación", obligatorio=True)
+    with _transaccion(ruta) as conexion:
+        factura = conexion.execute(
+            "SELECT id, prefijo, numero, anulada FROM facturas_manual WHERE id = ?",
+            (int(factura_id),),
+        ).fetchone()
+        if factura is None:
+            raise ErrorCartera("La factura que intentas reactivar no existe.")
+        numero = f"{factura['prefijo']}{factura['numero']}"
+        if not int(factura["anulada"]):
+            raise ErrorCartera(f"La factura {numero} no está anulada.")
+        conexion.execute(
+            "UPDATE facturas_manual SET anulada = 0, actualizada_en = ? WHERE id = ?",
+            (_ahora(), int(factura_id)),
+        )
+        _registrar(
+            conexion,
+            "factura_manual",
+            factura_id,
+            "REACTIVADA",
+            {"factura": numero, "motivo": razon},
+        )
+
+
 def _filas_facturas(
     conexion: sqlite3.Connection,
     empresa_codigo: str | None = None,
@@ -1425,6 +1466,70 @@ def registrar_abono(
         return abono_id
 
 
+def reversar_abono(
+    abono_id: int,
+    motivo: Any,
+    ruta: str | Path | None = None,
+) -> None:
+    """Deshace un abono: sus facturas recuperan el saldo y el registro queda marcado.
+
+    Las aplicaciones se retiran para que los saldos vuelvan a calcularse solos;
+    la auditoría conserva a qué facturas se había aplicado y por cuánto.
+    """
+
+    inicializar(ruta)
+    razon = _texto(motivo, "El motivo del reverso", obligatorio=True)
+    with _transaccion(ruta) as conexion:
+        abono = conexion.execute(
+            """
+            SELECT id, empresa_codigo, cliente_id, fecha, referencia, monto_cop,
+                   saldo_a_favor_cop, reversado_en
+            FROM abonos_manual WHERE id = ?
+            """,
+            (int(abono_id),),
+        ).fetchone()
+        if abono is None:
+            raise ErrorCartera("El abono que intentas reversar no existe.")
+        if abono["reversado_en"]:
+            raise ErrorCartera(
+                f"Este abono ya fue reversado el {str(abono['reversado_en'])[:10]}."
+            )
+        aplicaciones = [
+            {"factura_id": int(fila["factura_id"]), "monto_cop": int(fila["monto_cop"])}
+            for fila in conexion.execute(
+                """
+                SELECT factura_id, monto_cop FROM aplicaciones_abono
+                WHERE abono_id = ? ORDER BY factura_id
+                """,
+                (int(abono_id),),
+            ).fetchall()
+        ]
+        conexion.execute(
+            "DELETE FROM aplicaciones_abono WHERE abono_id = ?", (int(abono_id),)
+        )
+        conexion.execute(
+            "UPDATE abonos_manual SET reversado_en = ?, motivo_reverso = ? WHERE id = ?",
+            (_ahora(), razon, int(abono_id)),
+        )
+        _registrar(
+            conexion,
+            "abono_manual",
+            abono_id,
+            "REVERSADO",
+            {
+                "empresa": abono["empresa_codigo"],
+                "cliente_id": int(abono["cliente_id"]),
+                "fecha": abono["fecha"],
+                "referencia": abono["referencia"],
+                "monto_cop": int(abono["monto_cop"]),
+                "saldo_a_favor_cop": int(abono["saldo_a_favor_cop"]),
+                "aplicaciones": aplicaciones,
+                "motivo": razon,
+            },
+        )
+
+
+@_memorizar
 def listar_abonos(
     empresa_codigo: str | None = None,
     ruta: str | Path | None = None,
@@ -1439,8 +1544,9 @@ def listar_abonos(
         filas = conexion.execute(
             f"""
             SELECT
-                a.id, a.empresa_codigo, a.fecha, a.referencia, a.monto_cop,
-                a.saldo_a_favor_cop, a.creado_en, c.nombre AS cliente, c.nit,
+                a.id, a.empresa_codigo, a.cliente_id, a.fecha, a.referencia, a.monto_cop,
+                a.saldo_a_favor_cop, a.creado_en, a.reversado_en, a.motivo_reverso,
+                c.nombre AS cliente, c.nit,
                 COALESCE(SUM(ap.monto_cop), 0) AS aplicado_cop
             FROM abonos_manual a
             INNER JOIN clientes c ON c.id = a.cliente_id
@@ -1660,8 +1766,10 @@ __all__ = [
     "listar_facturas",
     "obtener_factura",
     "previsualizar_fifo",
+    "reactivar_factura",
     "registrar_abono",
     "resumen_actividad",
     "resumen_cartera",
+    "reversar_abono",
     "unificar_clientes_repetidos",
 ]

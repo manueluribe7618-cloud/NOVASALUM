@@ -435,7 +435,7 @@ _render_quick_edit(db.listar_facturas(), use_expander=False, invoice_id={factura
 
     def test_anular_exige_una_confirmacion_explicita(self) -> None:
         app = self.edit_app(self.invoice_id)
-        self.assertIn("no se puede deshacer", " ".join(caption.value for caption in app.caption))
+        self.assertIn("se puede reactivar", " ".join(caption.value for caption in app.caption))
         void = next(button for button in app.button if button.label == "Anular factura")
         self.assertTrue(void.disabled)
         void.click().run()

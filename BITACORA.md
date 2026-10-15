@@ -7,6 +7,49 @@ Cada entrada debe indicar el motivo, los archivos implicados, el impacto en
 datos o cálculos, las validaciones realizadas y, cuando corresponda, la
 autorización de Finanzas o del dueño.
 
+## 2026-10-15 — Reversar un abono y reactivar una factura anulada
+
+- Pedido del dueño: un abono mal registrado era permanente y una factura
+  anulada por error no volvía. Es el punto 1 del plan de pendientes.
+- `src/database.py`: `reversar_abono(abono_id, motivo)` retira las
+  aplicaciones del abono (los saldos de sus facturas se recalculan solos),
+  marca el abono con `reversado_en` y `motivo_reverso` y escribe en auditoría
+  «REVERSADO» con el detalle de a qué facturas se había aplicado y por cuánto.
+  El abono no se borra. `reactivar_factura(factura_id, motivo)` quita la marca
+  de anulada y escribe «REACTIVADA». Las dos exigen motivo, van en una sola
+  transacción y rechazan reversar dos veces, reactivar una factura viva o ids
+  inexistentes. Columnas nuevas en `abonos_manual`, con migración automática
+  de bases anteriores (`_asegurar_columna`). `listar_abonos` entrega además
+  `cliente_id`, `reversado_en` y `motivo_reverso`.
+- `src/views/manual.py`: en «Detalle del cliente», bajo cada empresa, el
+  desplegable «Abonos registrados (n)» lista los abonos (fecha, referencia,
+  monto, aplicado, saldo a favor, estado) y permite reversar uno eligiéndolo,
+  escribiendo el motivo y confirmando con la casilla. En la pestaña General,
+  al final, «Facturas anuladas (n)» lista las anuladas de la vista y permite
+  reactivar una con motivo y confirmación. Tras cada acción aparece el aviso
+  y la pantalla se actualiza; la anulación ya no dice «no se puede deshacer».
+- Ningún cálculo cambia: el saldo sigue siendo total − aplicaciones vigentes,
+  el FIFO y el abono específico siguen iguales. El saldo a favor histórico del
+  abono reversado queda en su registro y en la auditoría (pendiente el punto 2
+  del plan: aplicar saldos a favor).
+- Revisión adversarial antes de publicar (tres verificadores: dinero, pantalla
+  y regresiones). Detectaron y se corrigió: la limpieza del diálogo de abono
+  (`abono_empresa`/`abono_cliente`) había quedado al final de la lista de
+  abonos y dejaba «Registrar abono» sin cliente cuando el detalle mostraba
+  abonos vigentes; se devolvió a `_request_payment_for` con prueba propia.
+  Además: el formulario queda en blanco tras reversar o reactivar, la etiqueta
+  de anuladas incluye empresa y n.º para que dos iguales no se fundan en
+  «Todas», un abono reversado no muestra saldo a favor, `listar_abonos` queda
+  memorizada como `listar_facturas`, y las pruebas que simulan la base también
+  simulan `listar_abonos` para no abrir la base real. Confirmaron: FIFO y
+  específico restaurados byte a byte, abono inicial reversable, atomicidad
+  ante fallos, migración de bases antiguas, SQL válido para Postgres y
+  lecturas memorizadas frescas tras cada acción.
+- Validación: 395 pruebas (17 nuevas en `tests/test_reverso_y_reactivacion.py`),
+  pyflakes limpio; probado en navegador con la muestra: reverso del abono de
+  demostración y anulación + reactivación de DEMO1084, con tarjetas, tablas y
+  «Actividad reciente» coherentes. Al publicar hace falta «Reboot app».
+
 ## 2026-10-14 — La tabla de clientes llena siempre todo el ancho
 
 - Pedido del dueño: en «Clientes y saldo pendiente» media tabla quedaba vacía

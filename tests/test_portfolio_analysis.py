@@ -164,7 +164,8 @@ def manual_app():
         original_export(rows, **kwargs)
 
     company = st.session_state.get("filtro_empresa_manual", "TODAS")
-    with patch.object(manual.db, "listar_facturas", lambda code=None: [r for r in rows if code is None or r["empresa_codigo"] == code]), \
+    with patch.object(manual.db, "listar_facturas", lambda code=None, **kwargs: [r for r in rows if code is None or r["empresa_codigo"] == code]), \
+            patch.object(manual.db, "listar_abonos", lambda code=None, **kwargs: []), \
             patch.object(manual.db, "hay_datos", return_value=True), patch.object(manual, "_render_grid", capture), \
             patch.object(manual, "render_excel_export", capture_export):
         manual.render_manual_portfolio(company)
@@ -255,7 +256,7 @@ def empty_manual_app():
     from unittest.mock import patch
     from src.views import manual
 
-    with patch.object(manual.db, "listar_facturas", lambda code=None: []), \
+    with patch.object(manual.db, "listar_facturas", lambda code=None, **kwargs: []), \
             patch.object(manual.db, "hay_datos", return_value=False), \
             patch.object(manual.db, "_conexion_pg", side_effect=AssertionError("sin red")), \
             patch.object(manual, "_render_grid", lambda table, **kwargs: None), \

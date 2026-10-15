@@ -684,6 +684,74 @@ def _request_payment_for(company: str, cliente_id: int) -> None:
         st.session_state.pop(key, None)
 
 
+def _payment_label(row: dict[str, Any]) -> str:
+    return (
+        f"{format_date(row['fecha'])} · {row['referencia'] or 'sin referencia'} · "
+        f"{format_currency(row['monto_cop'])} · n.º {row['id']}"
+    )
+
+
+def _render_customer_payments(company: str, customer_ids: list[int]) -> None:
+    """Lista los abonos del cliente en la empresa y permite reversar uno, con confirmación."""
+
+    registries = set(customer_ids)
+    payments = [row for row in db.listar_abonos(company) if int(row["cliente_id"]) in registries]
+    if not payments:
+        return
+    active = [row for row in payments if not row["reversado_en"]]
+    suffix = f"{company}_{'_'.join(str(cid) for cid in customer_ids)}"
+    with st.expander(f"Abonos registrados ({len(payments)})", expanded=False):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Fecha": format_date(row["fecha"]),
+                        "Referencia": row["referencia"] or "—",
+                        "Monto": format_currency(row["monto_cop"]),
+                        "Aplicado": format_currency(row["aplicado_cop"]),
+                        "Saldo a favor": (
+                            format_currency(row["saldo_a_favor_cop"])
+                            if row["saldo_a_favor_cop"] and not row["reversado_en"] else ""
+                        ),
+                        "Estado": (
+                            f"Reversado el {format_date(row['reversado_en'])}"
+                            if row["reversado_en"] else "Vigente"
+                        ),
+                    }
+                    for row in payments
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        if not active:
+            return
+        st.caption(
+            "Reversar devuelve el saldo a las facturas y deja el abono marcado; no se borra nada."
+        )
+        labels = {_payment_label(row): row for row in active}
+        choice = st.selectbox(
+            "Abono a reversar", list(labels), index=None, placeholder="Elige el abono",
+            key=f"reverso_abono_{suffix}",
+        )
+        reason = st.text_input(
+            "Motivo del reverso", key=f"reverso_motivo_{suffix}",
+            placeholder="Por ejemplo: se registró al cliente equivocado",
+        )
+        confirm = st.checkbox("Sí, reversar este abono", key=f"reverso_confirmar_{suffix}")
+        ready = bool(choice and confirm and reason.strip())
+        if st.button("Reversar abono", key=f"reverso_boton_{suffix}", disabled=not ready) and ready:
+            try:
+                db.reversar_abono(int(labels[choice]["id"]), reason)
+            except db.ErrorCartera as exc:
+                st.error(str(exc))
+            else:
+                for key in (f"reverso_abono_{suffix}", f"reverso_motivo_{suffix}", f"reverso_confirmar_{suffix}"):
+                    st.session_state.pop(key, None)
+                _avisar("Abono reversado. Las facturas recuperaron su saldo.")
+                st.rerun()
+
+
 def _render_customer_detail(
     invoices: list[dict[str, Any]],
     filters: ManualFilters,
@@ -808,6 +876,7 @@ def _render_customer_detail(
             f'{html.escape(company_title)}: {format_currency(company_balance)}</div>',
             unsafe_allow_html=True,
         )
+        _render_customer_payments(code, customer_ids)
         st.write("")
     st.markdown(
         '<div class="statement-total-row">'
@@ -1363,7 +1432,8 @@ def _render_quick_edit(
                     st.rerun()
         with actions[1]:
             st.caption(
-                "Anular no se puede deshacer: la factura sale de la cartera y su número queda ocupado."
+                "Anular saca la factura de la cartera y conserva su número; "
+                "se puede reactivar desde «Facturas anuladas»."
             )
             confirm_void = st.checkbox(
                 "Sí, anular definitivamente",
@@ -1378,6 +1448,62 @@ def _render_quick_edit(
                     _avisar("Factura anulada. El registro continúa en auditoría.")
                     _cerrar_dialogo_edicion()
                     st.rerun()
+
+
+def _render_annulled_invoices(company: str) -> None:
+    """Muestra las facturas anuladas de la vista y permite reactivar una, con confirmación."""
+
+    annulled = [
+        row for row in db.listar_facturas(incluir_anuladas=True)
+        if row["estado"] == "ANULADA" and (company == TODAS or row["empresa_codigo"] == company)
+    ]
+    if not annulled:
+        return
+    with st.expander(f"Facturas anuladas ({len(annulled)})", expanded=False):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Factura": row["factura"],
+                        "Fecha": format_date(row["fecha"]),
+                        "Cliente": row["cliente"],
+                        "Empresa": row["empresa_codigo"],
+                        "Total": format_currency(row["total_cop"]),
+                    }
+                    for row in annulled
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "Reactivar devuelve la factura a la cartera con su mismo número; queda en auditoría."
+        )
+        labels = {
+            f"{row['factura']} · {row['empresa_codigo']} · {row['cliente']} · "
+            f"{format_currency(row['total_cop'])} · n.º {row['id']}": row
+            for row in annulled
+        }
+        choice = st.selectbox(
+            "Factura a reactivar", list(labels), index=None, placeholder="Elige la factura",
+            key="reactivar_factura",
+        )
+        reason = st.text_input(
+            "Motivo de la reactivación", key="reactivar_motivo",
+            placeholder="Por ejemplo: se anuló por error",
+        )
+        confirm = st.checkbox("Sí, reactivar esta factura", key="reactivar_confirmar")
+        ready = bool(choice and confirm and reason.strip())
+        if st.button("Reactivar factura", key="reactivar_boton", disabled=not ready) and ready:
+            try:
+                db.reactivar_factura(int(labels[choice]["id"]), reason)
+            except db.ErrorCartera as exc:
+                st.error(str(exc))
+            else:
+                for key in ("reactivar_factura", "reactivar_motivo", "reactivar_confirmar"):
+                    st.session_state.pop(key, None)
+                _avisar(f"Factura {labels[choice]['factura']} reactivada.")
+                st.rerun()
 
 
 def render_manual_portfolio(
@@ -1459,6 +1585,7 @@ def render_manual_portfolio(
                 else:
                     _avisar("Muestra cargada. Puedes editarla, registrar abonos y revisar la conciliación.")
                     st.rerun()
+        _render_annulled_invoices(company)
     with customers_tab:
         clicked_customer = _render_customer_debt(
             company, filtered

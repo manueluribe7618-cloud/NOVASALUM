@@ -338,7 +338,8 @@ def vista_manual():
         st.session_state["excel_ids"] = [fila["id"] for fila in data.args[0]]
         st.session_state["excel_opciones"] = data.keywords
 
-    with patch.object(manual.db, "listar_facturas", lambda code=None: [f for f in filas if code in (None, f["empresa_codigo"])]), \
+    with patch.object(manual.db, "listar_facturas", lambda code=None, **kwargs: [f for f in filas if code in (None, f["empresa_codigo"])]), \
+            patch.object(manual.db, "listar_abonos", lambda code=None, **kwargs: []), \
             patch.object(manual.db, "hay_datos", return_value=True), patch.object(manual, "_render_grid", lambda *a, **k: None), \
             patch.object(exports, "st", SimpleNamespace(download_button=capturar)):
         manual.render_manual_portfolio(st.session_state.get("filtro_empresa_manual", "TODAS"))
